@@ -26,37 +26,221 @@ const CARGOS_CLIENTE = [
 try {
   const express = require('express');
   const app = express();
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  app.use(express.json({limit: '5mb'}));
+  app.use(express.urlencoded({ extended: true, limit: '5mb' }));
   
   app.get('/', (req, res) => res.send('Leviathan Professional ON - Bot Online ✅'));
 
-  // PAINEL WEB FÁCIL - acesse https://seu-bot.onrender.com/admin
+  // PAINEL ULTRA FÁCIL V3 - ARRASTA E SOLTA
   app.get('/admin', (req, res) => {
     const estoque = carregar();
-    let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Leviathan Admin</title>
-    <style>body{font-family:Arial;background:#0f0f0f;color:#fff;padding:20px} .card{background:#1e1e1e;padding:20px;border-radius:12px;margin-bottom:20px;border:1px solid #333} input,textarea{width:100%;padding:10px;margin:5px 0;border-radius:8px;border:1px solid #444;background:#111;color:#fff} button{background:#FFD700;color:#000;font-weight:bold;padding:12px 20px;border:none;border-radius:8px;cursor:pointer;width:100%} button:hover{background:#ffea00} .prod{background:#252525;padding:15px;border-radius:8px;margin:10px 0} .ok{color:#00ff7f} .off{color:#ff4444}</style></head><body>
-    <h1>🔥 Leviathan Admin - Adicionar Produto FÁCIL</h1>
-    <div class="card"><h2>➕ Adicionar Produto Completo (Mais Fácil)</h2>
-    <form method="POST" action="/admin/add">
-      <label>ID do Produto (ex: sanguine-vip)</label><input name="id" required placeholder="sanguine-vip">
-      <label>Título (ex: SANGUINE ART)</label><input name="titulo" required placeholder="SANGUINE ART">
-      <label>Banner URL (https://i.imgur.com/...)</label><input name="banner" required placeholder="https://i.imgur.com/xxx.png">
-      <label>Nome do Plano (ex: SANGUINE + CDK)</label><input name="plano" required placeholder="SANGUINE + CDK">
-      <label>Preço (ex: 9,99)</label><input name="preco" required placeholder="9,99">
-      <label>Contas (cole uma por linha: email:senha)</label><textarea name="contas" rows="8" required placeholder="conta1@gmail.com:senha123&#10;conta2@gmail.com:senha456"></textarea>
-      <button type="submit">🚀 CRIAR PRODUTO AGORA</button>
-    </form></div>
-    <div class="card"><h2>📦 Estoque Atual: ${estoque.reduce((a,c)=>a+c.opcoes.reduce((x,y)=>x+y.contas.length,0),0)} contas</h2>`;
-    estoque.forEach(c=>{
-      html+=`<div class="prod"><b>${c.titulo}</b> (ID: ${c.id}) - ${c.banner}<br>`;
-      c.opcoes.forEach(o=>{
-        html+=`&nbsp;&nbsp; ${o.contas.length>0?'<span class=ok>🟢</span>':'<span class=off>🔴</span>'} <b>${o.label}</b> - R$ ${o.preco} - ${o.contas.length} unid.<br>`;
+    const total = estoque.reduce((a,c)=>a+c.opcoes.reduce((x,y)=>x+y.contas.length,0),0);
+    const opcoesList = estoque.flatMap(c=> c.opcoes.map(o=> ({comboId:c.id, comboTitulo:c.titulo, label:o.label, preco:o.preco, qtd:o.contas.length })));
+    let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Leviathan - Super Fácil</title>
+    <style>
+      *{box-sizing:border-box} body{font-family:Inter,Arial;background:#0a0a0a;color:#fff;padding:15px;max-width:900px;margin:0 auto}
+      .card{background:#171717;padding:22px;border-radius:16px;margin-bottom:18px;border:1px solid #2a2a2a}
+      h1{color:#FFD700;font-size:24px} h2{font-size:18px;margin-top:0}
+      input,select,textarea{width:100%;padding:12px;margin:6px 0 12px 0;border-radius:10px;border:1px solid #333;background:#111;color:#fff;font-size:14px}
+      button{background:#FFD700;color:#000;font-weight:900;padding:14px 20px;border:none;border-radius:10px;cursor:pointer;width:100%;font-size:16px}
+      button:hover{background:#ffea00} .drop{border:2px dashed #FFD700;background:#1a1a00;padding:30px;text-align:center;border-radius:14px;cursor:pointer;margin:10px 0}
+      .drop.drag{border-color:#00ff7f;background:#001a00}
+      .prod{background:#222;padding:12px;border-radius:10px;margin:8px 0;font-size:13px}
+      .ok{color:#00ff7f} .off{color:#ff4444} .badge{background:#333;padding:3px 8px;border-radius:6px;font-size:12px}
+      .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+      @media(max-width:600px){.grid{grid-template-columns:1fr}}
+    </style></head><body>
+    <h1>⚡ LEVIATHAN - MODO SUPER FÁCIL</h1>
+    <p>Arraste um .txt com contas ou cole no campo. 1 clique e já vai pro painel.</p>
+    
+    <div class="card" style="border-color:#FFD700">
+      <h2>📥 PASSO 1 - Jogue suas contas aqui</h2>
+      <div id="drop" class="drop">
+        <div style="font-size:40px">📄</div>
+        <b>ARRASTE SEU ARQUIVO .TXT AQUI</b><br>
+        <span style="color:#aaa">ou clique para escolher</span><br>
+        <span style="font-size:12px;color:#888">Formato: email:senha por linha</span>
+        <input type="file" id="fileInput" accept=".txt,.csv" style="display:none">
+      </div>
+      <textarea id="contas" rows="8" placeholder="conta1@gmail.com:senha123&#10;conta2@gmail.com:senha456&#10;conta3@gmail.com:senha789"></textarea>
+      <div id="preview" style="background:#111;padding:10px;border-radius:8px;margin-top:8px;display:none"></div>
+    </div>
+
+    <div class="card">
+      <h2>📦 PASSO 2 - Onde colocar?</h2>
+      <div class="grid">
+        <div>
+          <label>Produto Existente</label>
+          <select id="produtoExistente">
+            <option value="">-- Criar Produto NOVO --</option>
+            ${opcoesList.map(o=> `<option value="${o.comboId}|${o.label}">${o.comboTitulo} > ${o.label} (${o.qtd}) - R$ ${o.preco}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Ou selecione o plano existente</label>
+          <select id="planoSelect">
+            <option value="">-- Digitar novo --</option>
+            ${[...new Set(opcoesList.map(o=>o.label))].map(l=> `<option value="${l}">${l}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      
+      <div id="novoProduto" style="background:#111;padding:15px;border-radius:10px;margin-top:10px">
+        <h3 style="margin:0 0 10px 0">🆕 Novo Produto (só se não existir)</h3>
+        <div class="grid">
+          <div><label>ID (ex: sanguine-vip)</label><input id="id" placeholder="sanguine-vip"></div>
+          <div><label>Título (ex: SANGUINE ART)</label><input id="titulo" placeholder="SANGUINE ART"></div>
+        </div>
+        <label>Banner URL</label><input id="banner" placeholder="https://i.imgur.com/xxx.png" value="https://i.imgur.com/8QJ4sQy.png">
+        <div class="grid">
+          <div><label>Nome do Plano</label><input id="plano" placeholder="SANGUINE + CDK"></div>
+          <div><label>Preço</label><input id="preco" placeholder="9,99" value="9,99"></div>
+        </div>
+      </div>
+      <button onclick="enviar()" id="btnEnviar" style="margin-top:15px">🚀 ADICIONAR AGORA - 1 CLIQUE</button>
+      <div id="resultado" style="margin-top:15px"></div>
+    </div>
+
+    <div class="card">
+      <h2>📊 Estoque Atual: ${total} contas</h2>
+      ${estoque.map(c=> `<div class="prod"><b>${c.titulo}</b> <span class="badge">${c.id}</span><br>${c.opcoes.map(o=> `&nbsp;&nbsp; ${o.contas.length>0?'<span class=ok>🟢</span>':'<span class=off>🔴</span>'} <b>${o.label}</b> - R$ ${o.preco} - ${o.contas.length} unid.`).join('<br>')}</div>`).join('')}
+    </div>
+
+    <script>
+      const drop = document.getElementById('drop');
+      const fileInput = document.getElementById('fileInput');
+      const contasTa = document.getElementById('contas');
+      const preview = document.getElementById('preview');
+      const produtoExistente = document.getElementById('produtoExistente');
+      const planoSelect = document.getElementById('planoSelect');
+
+      function parseContas(text){
+        return text.split(/\n|\r/).map(s=>s.trim()).filter(Boolean).filter(s=>s.includes(':'));
+      }
+      function updatePreview(){
+        const lista = parseContas(contasTa.value);
+        if(lista.length>0){
+          preview.style.display='block';
+          preview.innerHTML = '<b class=ok>✅ ' + lista.length + ' contas detectadas</b><br><span style=color:#888>' + lista.slice(0,3).join('<br>') + (lista.length>3?'<br>... +'+(lista.length-3):'') + '</span>';
+        } else {
+          preview.style.display='none';
+        }
+      }
+      contasTa.addEventListener('input', updatePreview);
+
+      drop.addEventListener('click', ()=> fileInput.click());
+      drop.addEventListener('dragover', e=> {e.preventDefault(); drop.classList.add('drag')});
+      drop.addEventListener('dragleave', ()=> drop.classList.remove('drag'));
+      drop.addEventListener('drop', e=> {
+        e.preventDefault(); drop.classList.remove('drag');
+        const file = e.dataTransfer.files[0];
+        if(file) lerArquivo(file);
       });
-      html+=`</div>`;
-    });
-    html+=`</div></body></html>`;
+      fileInput.addEventListener('change', e=>{
+        const file = e.target.files[0];
+        if(file) lerArquivo(file);
+      });
+      function lerArquivo(file){
+        const reader = new FileReader();
+        reader.onload = e=> { contasTa.value = e.target.result; updatePreview(); };
+        reader.readAsText(file);
+      }
+
+      produtoExistente.addEventListener('change', ()=>{
+        if(produtoExistente.value){
+          document.getElementById('novoProduto').style.display='none';
+          const [cid, label] = produtoExistente.value.split('|');
+          document.getElementById('id').value = cid;
+          document.getElementById('plano').value = label;
+        } else {
+          document.getElementById('novoProduto').style.display='block';
+        }
+      });
+      planoSelect.addEventListener('change', ()=>{
+        if(planoSelect.value) document.getElementById('plano').value = planoSelect.value;
+      });
+
+      async function enviar(){
+        const contas = contasTa.value.trim();
+        if(!contas){ alert('Cole as contas primeiro!'); return; }
+        const lista = parseContas(contas);
+        if(lista.length===0){ alert('Nenhuma conta válida! Use formato email:senha'); return; }
+        
+        let payload = { contas };
+        if(produtoExistente.value){
+          const [id, plano] = produtoExistente.value.split('|');
+          payload.id = id;
+          payload.plano = plano;
+          payload.modo = 'existente';
+        } else {
+          payload.id = document.getElementById('id').value.trim();
+          payload.titulo = document.getElementById('titulo').value.trim();
+          payload.banner = document.getElementById('banner').value.trim();
+          payload.plano = document.getElementById('plano').value.trim();
+          payload.preco = document.getElementById('preco').value.trim();
+          payload.modo = 'novo';
+          if(!payload.id || !payload.titulo || !payload.plano){ alert('Preencha ID, Título e Plano!'); return; }
+        }
+
+        const btn = document.getElementById('btnEnviar');
+        btn.innerText = '⏳ Enviando...';
+        btn.disabled = true;
+        try{
+          const res = await fetch('/admin/add-v2', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+          const data = await res.json();
+          if(data.ok){
+            document.getElementById('resultado').innerHTML = '<div style=background:#002a00;padding:15px;border-radius:10px;border:1px solid #00ff7f><b class=ok>✅ ' + data.added + ' contas adicionadas!</b><br>Produto: ' + data.produto + ' > ' + data.plano + '<br>Total agora: ' + data.total + ' unidades<br><br><a href="/admin" style=color:#FFD700>🔄 Recarregar página</a> | No Discord digite /painel-vendas para atualizar</div>';
+            contasTa.value = '';
+            updatePreview();
+          } else {
+            document.getElementById('resultado').innerHTML = '<div style=background:#2a0000;padding:15px;border-radius:10px;color:#ff5555>❌ Erro: '+data.error+'</div>';
+          }
+        }catch(e){
+          document.getElementById('resultado').innerHTML = '❌ Erro de conexão: '+e.message;
+        }
+        btn.innerText = '🚀 ADICIONAR AGORA - 1 CLIQUE';
+        btn.disabled = false;
+      }
+    </script>
+    </body></html>`;
     res.send(html);
+  });
+
+  app.post('/admin/add-v2', (req, res) => {
+    try{
+      const {id, titulo, banner, plano, preco, contas, modo} = req.body;
+      if(!contas) return res.json({ok:false, error:'Sem contas'});
+      const estoque = carregar();
+      let combo = estoque.find(c=>c.id===id);
+      
+      if(modo==='existente'){
+        if(!combo) return res.json({ok:false, error:'Produto não encontrado'});
+        let opcao = combo.opcoes.find(o=>o.label===plano);
+        if(!opcao) return res.json({ok:false, error:'Plano não encontrado'});
+        const lista = contas.split(/\n|\r/).flatMap(l=>l.split(/[,; ]+/)).map(s=>s.trim()).filter(Boolean).filter(s=>s.includes(':'));
+        opcao.contas.push(...lista);
+        salvar(estoque);
+        return res.json({ok:true, added: lista.length, produto: combo.titulo, plano: opcao.label, total: opcao.contas.length});
+      } else {
+        if(!id || !titulo || !plano) return res.json({ok:false, error:'ID, Título e Plano obrigatórios'});
+        if(!combo){
+          combo = {id, titulo: titulo||id, banner: banner||'https://i.imgur.com/8QJ4sQy.png', opcoes:[]};
+          estoque.push(combo);
+        }
+        let opcao = combo.opcoes.find(o=>o.label.toLowerCase()===plano.toLowerCase());
+        if(!opcao){
+          opcao = {id: String(Date.now()), label: plano, preco: preco||'9,99', contas:[]};
+          combo.opcoes.push(opcao);
+        } else {
+          if(preco) opcao.preco = preco;
+        }
+        const lista = contas.split(/\n|\r/).flatMap(l=>l.split(/[,; ]+/)).map(s=>s.trim()).filter(Boolean).filter(s=>s.includes(':'));
+        if(lista.length===0) return res.json({ok:false, error:'Nenhuma conta válida (use email:senha)'});
+        opcao.contas.push(...lista);
+        salvar(estoque);
+        return res.json({ok:true, added: lista.length, produto: combo.titulo, plano: opcao.label, total: opcao.contas.length});
+      }
+    }catch(e){ res.json({ok:false, error: e.message}); }
   });
 
   app.post('/admin/add', (req, res) => {
@@ -82,7 +266,7 @@ try {
     }catch(e){ res.send('Erro: '+e.message); }
   });
 
-  app.listen(process.env.PORT || 3000, () => console.log('🚀 Server ON + Admin em /admin'));
+  app.listen(process.env.PORT || 3000, () => console.log('🚀 Server ON + Admin SUPER FÁCIL em /admin'));
 } catch {}
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages] });
@@ -294,16 +478,55 @@ ${c.opcoes.map(o=>{
   }
 
   const components = [];
-  if(estoque.length>0){
-    const opcoes = estoque.slice(0,25).map(c=>{
-      const total = c.opcoes.reduce((a,b)=>a+b.contas.length,0);
-      return new StringSelectMenuOptionBuilder()
-        .setLabel(`${c.titulo}`.slice(0,100))
-        .setDescription(total===0 ? '🔴 ESGOTADO' : `🟢 ${total} disponíveis • Entrega instantânea`.slice(0,100))
-        .setValue(c.id)
-        .setEmoji(total===0 ? '🔴' : '🛒')
+  
+  // ===== NOVO SISTEMA: 1 CLIQUE DIRETO PRO TICKET =====
+  // Junta todas as opções de todos os produtos
+  const todasOpcoes = [];
+  estoque.forEach(combo => {
+    combo.opcoes.forEach(op => {
+      todasOpcoes.push({
+        comboId: combo.id,
+        comboTitulo: combo.titulo,
+        opcao: op
+      });
     });
-    components.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('selecionar_combo').setPlaceholder('🛒 Selecione o produto para ver detalhes').addOptions(opcoes)));
+  });
+
+  const opcoesComEstoque = todasOpcoes.filter(x => x.opcao.contas.length > 0);
+
+  if(todasOpcoes.length === 0 || opcoesComEstoque.length === 0){
+    // ESTOQUE VAZIO - mostra mensagem "estoque indisponivel!"
+    const opcaoVazia = new StringSelectMenuOptionBuilder()
+      .setLabel('🔴 ESTOQUE INDISPONIVEL!')
+      .setDescription('Nenhuma conta disponível no momento - Volte mais tarde')
+      .setValue('estoque_vazio')
+      .setEmoji('🔴');
+    
+    components.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('estoque_vazio')
+        .setPlaceholder('🔴 Clique aqui para ver as opções')
+        .addOptions([opcaoVazia])
+    ));
+  } else {
+    // TEM ESTOQUE - mostra todas as contas disponíveis, clique já abre ticket
+    const opcoesMenu = opcoesComEstoque.slice(0,25).map(item => {
+      const op = item.opcao;
+      const label = `${item.comboTitulo} - ${op.label}`.slice(0,100);
+      const desc = `R$ ${op.preco} | 🟢 ${op.contas.length} disponíveis | Clique para comprar`.slice(0,100);
+      return new StringSelectMenuOptionBuilder()
+        .setLabel(label)
+        .setDescription(desc)
+        .setValue(`${item.comboId}|${op.id}`)
+        .setEmoji('🛒')
+    });
+
+    components.push(new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId('comprar_select')
+        .setPlaceholder('🔽 Clique aqui para ver as opções')
+        .addOptions(opcoesMenu)
+    ));
   }
 
   return { embeds, files, components };
@@ -521,10 +744,14 @@ ${dados.compras.length>0 ? dados.compras.map(c=>`> ${c.produto} - R$ ${c.preco.t
       return interaction.reply({ embeds: [embed], components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('comprar_select').setPlaceholder('💎 Escolha o plano').addOptions(opcoesMenu))], ephemeral: true });
     }
 
+    if(interaction.isStringSelectMenu() && interaction.customId==='estoque_vazio'){
+      return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Nenhuma conta disponível no momento.\n> Volte mais tarde ou contate <@&'+STAFF_ROLE_ID+'> para encomendar!', ephemeral: true});
+    }
+
     if(interaction.isStringSelectMenu() && interaction.customId==='comprar_select'){
       const [comboId,opcaoId]=interaction.values[0].split('|'); 
       const estoque=carregar(); const combo=estoque.find(c=>c.id===comboId); const opcao=combo?.opcoes.find(o=>o.id===opcaoId);
-      if(!opcao || opcao.contas.length<=0) return interaction.reply({content:'🔴 **ESGOTADO**',ephemeral:true});
+      if(!opcao || opcao.contas.length<=0) return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta acabou de esgotar! Tente outra opção.',ephemeral:true});
 
       const ticket=await interaction.guild.channels.create({
         name:`🛒・${interaction.user.username}-${opcao.label.toLowerCase().replace(/[^a-z0-9]/g,'-')}`.slice(0,90),
