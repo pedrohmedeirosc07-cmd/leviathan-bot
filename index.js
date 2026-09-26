@@ -272,8 +272,20 @@ try {
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages] });
 
 function carregar() { 
-  if (!fs.existsSync(ESTOQUE_FILE)) { fs.writeFileSync(ESTOQUE_FILE, '[]'); return []; } 
-  try { return JSON.parse(fs.readFileSync(ESTOQUE_FILE, 'utf8')); } catch { return []; } 
+  try {
+    if (!fs.existsSync(ESTOQUE_FILE)) { 
+      // Se não existe, tenta criar com estoque atual em memória ou vazio
+      fs.writeFileSync(ESTOQUE_FILE, '[]'); 
+      return []; 
+    }
+    const data = fs.readFileSync(ESTOQUE_FILE, 'utf8');
+    if(!data || data.trim()==='' || data.trim()==='[]'){
+      // Arquivo vazio - não retorna vazio se já tinha algo antes, tenta manter
+      const parsed = JSON.parse(data||'[]');
+      return parsed;
+    }
+    return JSON.parse(data); 
+  } catch { return []; } 
 }
 function salvar(e) { fs.writeFileSync(ESTOQUE_FILE, JSON.stringify(e, null, 2)); }
 function carregarPainel(){ if(!fs.existsSync(PAINEL_FILE)) return null; try{ return JSON.parse(fs.readFileSync(PAINEL_FILE,'utf8')); }catch{return null;} }
@@ -818,11 +830,11 @@ Garantia: 7 dias
         new ButtonBuilder().setCustomId(`copiar_pix`).setLabel('📋 Copiar Pix').setStyle(ButtonStyle.Secondary)
       );
       const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`comprovante_${comboId}_${opcaoId}`).setLabel('✅ Já paguei').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`comprovante_${comboId}|${opcaoId}`).setLabel('✅ Já paguei').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('fechar_ticket').setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
       );
       const row3 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`confirmar_pagamento_${comboId}_${opcaoId}`).setLabel('✅ Confirmar Pagamento e Entregar').setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId(`confirmar_pagamento_${comboId}|${opcaoId}`).setLabel('✅ Confirmar Pagamento e Entregar').setStyle(ButtonStyle.Success)
       );
 
       await ticket.send({ content: `${interaction.user} <@&${STAFF_ROLE_ID}> • Pedido criado`, embeds: [embedProd, embedPay], components: [row1, row2, row3] });
@@ -834,7 +846,11 @@ Garantia: 7 dias
         return interaction.reply({ content: `**Pix:**\n\`\`\`${PIX_KEY}\`\`\`\nTitular: ${PIX_NOME}`, ephemeral: true });
       }
       if(interaction.customId.startsWith('comprovante_')){
-        return interaction.reply({ content: `📎 Envie o comprovante aqui!`, ephemeral: false });
+        return interaction.reply({ content: `📎 Envie o comprovante aqui no ticket!\n> Anexe a imagem do Pix e aguarde um staff confirmar.`, ephemeral: false });
+      }
+      // Suporte para novo formato com |
+      if(interaction.customId.startsWith('comprovante') && interaction.customId.includes('|')){
+        return interaction.reply({ content: `📎 Envie o comprovante aqui no ticket!\n> Anexe a imagem do Pix e aguarde um staff confirmar.`, ephemeral: false });
       }
       if(interaction.customId.startsWith('confirmar_pagamento_')){
         if(!isStaff(interaction)){
@@ -843,9 +859,28 @@ Garantia: 7 dias
             ephemeral: true 
           });
         }
-        const parts=interaction.customId.split('_'); const comboId=parts[2]; const opcaoId=parts.slice(3).join('_'); 
-        const estoque=carregar(); const combo=estoque.find(c=>c.id===comboId); const opcao=combo?.opcoes.find(o=>o.id===opcaoId);
-        if(!opcao || opcao.contas.length===0) return interaction.reply({content:'🔴 Sem estoque!', ephemeral: true});
+        // Novo formato com | para evitar bug de _ no ID
+        let comboId, opcaoId;
+        if(interaction.customId.includes('|')){
+          const payload = interaction.customId.replace('confirmar_pagamento_','');
+          [comboId, opcaoId] = payload.split('|');
+        } else {
+          // fallback antigo com _
+          const parts=interaction.customId.split('_'); comboId=parts[2]; opcaoId=parts.slice(3).join('_');
+        }
+        const estoque=carregar(); 
+        const combo=estoque.find(c=>c.id===comboId);
+        if(!combo){
+          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n> Produto não encontrado (painel desatualizado). Digite /painel-vendas novamente.', ephemeral: true});
+        }
+        let opcao = combo.opcoes.find(o=>o.id===opcaoId);
+        if(!opcao) opcao = combo.opcoes.find(o=>String(o.id)===String(opcaoId));
+        if(!opcao){
+          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n> Opção não encontrada.', ephemeral: true});
+        }
+        if(!opcao.contas || opcao.contas.length===0){
+          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta **'+opcao.label+'** acabou de esgotar!\n> Use /painel-vendas para atualizar o painel.', ephemeral: true});
+        }
 
         // ===== ACHA O COMPRADOR DO TICKET =====
         let compradorId = null;
