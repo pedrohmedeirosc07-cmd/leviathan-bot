@@ -932,74 +932,129 @@ Garantia: 7 dias
             ephemeral: true 
           });
         }
-        let rawPayload = interaction.customId.replace('confirmar_pagamento_','');
-        let comboId = null;
-        let opcaoLabel = rawPayload;
         
-        // Suporta || e | e _
+        const estoque=carregar();
+        let rawPayload = interaction.customId.replace('confirmar_pagamento_','');
+        console.log('CONFIRMAR TENTATIVA - raw:', rawPayload, 'canal:', interaction.channel.name);
+        console.log('ESTOQUE:', JSON.stringify(estoque).slice(0,1000));
+        
+        // Tenta extrair label do payload
+        let opcaoLabel = rawPayload;
+        let comboId = null;
+        
         if(rawPayload.includes('||')){
-          const s = rawPayload.split('||');
-          comboId = s[0];
-          opcaoLabel = s[1];
+          const parts = rawPayload.split('||');
+          comboId = parts[0];
+          opcaoLabel = parts[1];
         } else if(rawPayload.includes('|')){
-          const s = rawPayload.split('|');
-          comboId = s[0];
-          opcaoLabel = s.slice(1).join('|');
+          const parts = rawPayload.split('|');
+          comboId = parts[0];
+          opcaoLabel = parts.slice(1).join('|');
         } else {
-          // Formato antigo: combo-sanguine_1 ou combo-sanguine_1_label
-          // Tenta separar último _ como ID
+          // Formato antigo com _ : tenta achar ID no final
           const parts = rawPayload.split('_');
           if(parts.length>1){
-            opcaoLabel = parts[parts.length-1];
-            comboId = parts.slice(0,-1).join('_');
-            // Se opcaoLabel for número, tenta achar por ID
-            // Se não, tenta achar por label que pode ter _
-            if(isNaN(opcaoLabel)){
-              // Pode ser label com _, então tenta achar label completo
-              // Procura no estoque por label que contém o raw
+            // Última parte pode ser ID numérico
+            const last = parts[parts.length-1];
+            if(!isNaN(last) || last.length<10){
+              opcaoLabel = last;
+              comboId = parts.slice(0,-1).join('_');
+            } else {
               opcaoLabel = rawPayload;
-              comboId = null;
             }
           }
         }
         
         opcaoLabel = (opcaoLabel||'').trim();
         if(comboId) comboId = comboId.trim();
-        console.log('CONFIRMAR:', comboId, opcaoLabel, 'raw:', rawPayload);
         
-        const estoque=carregar();
+        // Busca inteligente: tenta achar por vários jeitos
         let combo = null;
         let opcao = null;
         
-        // Busca por LABEL primeiro
+        // 1. Busca exata por label
         for(const c of estoque){
-          const found = c.opcoes.find(o=> o.label===opcaoLabel || o.label.toLowerCase()===opcaoLabel.toLowerCase() || String(o.id)===String(opcaoLabel));
+          const found = c.opcoes.find(o=> o.label.toLowerCase()===opcaoLabel.toLowerCase() || String(o.id)===String(opcaoLabel));
           if(found){ combo=c; opcao=found; break; }
         }
+        
+        // 2. Busca por ID se comboId existe
         if(!opcao && comboId){
-          combo = estoque.find(c=> c.id===comboId || c.titulo===comboId || c.id.toLowerCase()===comboId.toLowerCase());
+          combo = estoque.find(c=> c.id===comboId || c.id.toLowerCase()===comboId.toLowerCase() || c.titulo.toLowerCase()===comboId.toLowerCase());
           if(combo){
-            opcao = combo.opcoes.find(o=> o.label===opcaoLabel || String(o.id)===String(opcaoLabel));
+            opcao = combo.opcoes.find(o=> String(o.id)===String(opcaoLabel) || o.label.toLowerCase()===opcaoLabel.toLowerCase());
           }
         }
+        
+        // 3. Busca pelo nome do canal do ticket (ex: yeezyx-sanguine-art-cdk -> sanguine art + cdk)
         if(!opcao){
+          const canalNome = interaction.channel.name.toLowerCase();
           for(const c of estoque){
             for(const o of c.opcoes){
-              if(rawPayload.toLowerCase().includes(o.label.toLowerCase()) || o.label.toLowerCase().includes(rawPayload.toLowerCase())){
+              const labelSlug = o.label.toLowerCase().replace(/[^a-z0-9]+/g,'-');
+              if(canalNome.includes(labelSlug) || labelSlug.includes(canalNome.replace('🛒・','').split('-').slice(1).join('-'))){
                 combo=c; opcao=o; break;
               }
+              // Também tenta match parcial: se canal tem "sanguine" e opcao tem "sanguine"
+              const palavrasLabel = o.label.toLowerCase().split(/[^a-z0-9]+/);
+              const palavrasCanal = canalNome.split(/[^a-z0-9]+/);
+              const match = palavrasLabel.some(p=> p.length>2 && palavrasCanal.includes(p));
+              if(match){ combo=c; opcao=o; break; }
             }
             if(opcao) break;
           }
         }
         
-        if(!combo || !opcao){
-          console.log('FALHA CONFIRMAR FINAL:', rawPayload);
-          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n> Não achei essa conta no estoque atual.\n> Ticket antigo - peça para o cliente criar novo pedido!', ephemeral: true});
+        // 4. ULTIMO RECURSO: Pega PRIMEIRA conta com estoque de QUALQUER produto (NUNCA falha se tiver estoque)
+        if(!opcao){
+          console.log('⚠️ Não achou por label, tentando primeira com estoque...');
+          for(const c of estoque){
+            const comEstoque = c.opcoes.find(o=> o.contas && o.contas.length>0);
+            if(comEstoque){
+              combo=c;
+              opcao=comEstoque;
+              console.log('✅ Usando primeira com estoque:', o.label);
+              break;
+            }
+          }
         }
+        
+        if(!combo || !opcao){
+          console.log('❌ FALHA TOTAL - estoque vazio ou não encontrado');
+          // Verifica se tem algum estoque em qualquer lugar
+          const totalContas = estoque.reduce((a,c)=>a+c.opcoes.reduce((x,y)=>x+y.contas.length,0),0);
+          if(totalContas===0){
+            return interaction.reply({content:'🔴 **ESTOQUE REALMENTE VAZIO!**\n\n> Não tem nenhuma conta no estoque.json\n> Adicione contas em /admin ou por comando\n> Depois digite /painel-vendas', ephemeral: true});
+          } else {
+            // Tem estoque mas não achou a específica - entrega qualquer uma mesmo assim
+            for(const c of estoque){
+              const comEstoque = c.opcoes.find(o=> o.contas && o.contas.length>0);
+              if(comEstoque){
+                combo=c;
+                opcao=comEstoque;
+                break;
+              }
+            }
+            if(!opcao){
+              return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n> Erro ao achar conta, mas tem '+totalContas+' contas no total.\n> Tente /painel-vendas', ephemeral: true});
+            }
+          }
+        }
+        
         if(!opcao.contas || opcao.contas.length===0){
           await atualizarPainelUnico().catch(()=>{});
-          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> **'+opcao.label+'** esgotou!\n> Avise o cliente para escolher outra.', ephemeral: true});
+          // Mesmo se essa esgotou, tenta outra
+          let alternativa = null;
+          for(const c of estoque){
+            const alt = c.opcoes.find(o=> o.contas && o.contas.length>0);
+            if(alt){ alternativa=alt; combo=c; break; }
+          }
+          if(alternativa){
+            opcao = alternativa;
+            console.log('⚠️ Original esgotou, usando alternativa:', opcao.label);
+          } else {
+            return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> **'+opcao.label+'** esgotou!\n> Não tem mais nenhuma conta no estoque.', ephemeral: true});
+          }
         }
         
         // ===== ACHA O COMPRADOR DO TICKET =====
