@@ -903,11 +903,11 @@ Garantia: 7 dias
         new ButtonBuilder().setCustomId(`copiar_pix`).setLabel('📋 Copiar Pix').setStyle(ButtonStyle.Secondary)
       );
       const row2 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`comprovante_${comboId}|${opcaoId}`).setLabel('✅ Já paguei').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`comprovante_${combo.id}||${opcao.label}`).setLabel('✅ Já paguei').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('fechar_ticket').setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
       );
       const row3 = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`confirmar_pagamento_${comboId}|${opcaoId}`).setLabel('✅ Confirmar Pagamento e Entregar').setStyle(ButtonStyle.Success)
+        new ButtonBuilder().setCustomId(`confirmar_pagamento_${combo.id}||${opcao.label}`).setLabel('✅ Confirmar Pagamento e Entregar').setStyle(ButtonStyle.Success)
       );
 
       await ticket.send({ content: `${interaction.user} <@&${STAFF_ROLE_ID}> • Pedido criado`, embeds: [embedProd, embedPay], components: [row1, row2, row3] });
