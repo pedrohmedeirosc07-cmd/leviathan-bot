@@ -510,10 +510,9 @@ ${estoque.length===0 ? '> *Nenhum produto no momento - Aguarde restock*\n> Conta
   const opcoesComEstoque = todasOpcoes.filter(x => x.opcao.contas.length > 0);
 
   if(todasOpcoes.length === 0 || opcoesComEstoque.length === 0){
-    // ESTOQUE VAZIO - mostra mensagem "estoque indisponivel!"
     const opcaoVazia = new StringSelectMenuOptionBuilder()
       .setLabel('🔴 ESTOQUE INDISPONIVEL!')
-      .setDescription('Nenhuma conta disponível no momento - Volte mais tarde')
+      .setDescription('Nenhuma conta disponível no momento')
       .setValue('estoque_vazio')
       .setEmoji('🔴');
     
@@ -524,15 +523,17 @@ ${estoque.length===0 ? '> *Nenhum produto no momento - Aguarde restock*\n> Conta
         .addOptions([opcaoVazia])
     ));
   } else {
-    // TEM ESTOQUE - mostra todas as contas disponíveis, clique já abre ticket
+    // USANDO LABEL como valor principal - NUNCA mais dá erro de ID
     const opcoesMenu = opcoesComEstoque.slice(0,25).map(item => {
       const op = item.opcao;
       const label = `${item.comboTitulo} - ${op.label}`.slice(0,100);
-      const desc = `R$ ${op.preco} | 🟢 ${op.contas.length} disponíveis | Clique para comprar`.slice(0,100);
+      const desc = `R$ ${op.preco} | 🟢 ${op.contas.length} disp. | Clique para comprar`.slice(0,100);
+      // VALOR = LABEL (estável) + ID como fallback
+      const valor = `${item.comboId}||${op.label}`;
       return new StringSelectMenuOptionBuilder()
         .setLabel(label)
         .setDescription(desc)
-        .setValue(`${item.comboId}|${op.id}`)
+        .setValue(valor.slice(0,100)) // Discord limite 100 chars
         .setEmoji('🛒')
     });
 
@@ -766,62 +767,73 @@ ${dados.compras.length>0 ? dados.compras.map(c=>`> ${c.produto} - R$ ${c.preco.t
     if(interaction.isStringSelectMenu() && interaction.customId==='comprar_select'){
       const raw = interaction.values[0];
       console.log('COMPRA TENTATIVA:', raw);
-      const parts = raw.split('|');
-      let comboId = parts[0];
-      let opcaoId = parts[1];
-      // Fallback se não tem | (formato antigo)
-      if(!opcaoId){
-        opcaoId = comboId;
-        comboId = null;
-      }
       const estoque=carregar();
-      console.log('ESTOQUE ATUAL:', JSON.stringify(estoque).slice(0,800));
+      console.log('ESTOQUE:', JSON.stringify(estoque).slice(0,1000));
       
-      // Busca ultra robusta: procura em TODOS os combos
+      // Novo formato: comboId||label
+      let comboId = null;
+      let opcaoLabel = raw;
+      if(raw.includes('||')){
+        const split = raw.split('||');
+        comboId = split[0];
+        opcaoLabel = split[1];
+      } else if(raw.includes('|')){
+        // Compatibilidade com formato antigo com |
+        const parts = raw.split('|');
+        if(parts.length>=2){
+          comboId = parts[0];
+          opcaoLabel = parts.slice(1).join('|');
+        } else {
+          opcaoLabel = raw;
+        }
+      }
+      
+      opcaoLabel = opcaoLabel.trim();
+      if(comboId) comboId = comboId.trim();
+      
+      // Busca por LABEL (estável, nunca muda)
       let combo = null;
       let opcao = null;
       
-      // 1. Tenta comboId + opcaoId exatos
-      if(comboId){
-        combo = estoque.find(c=>c.id===comboId || c.id.toLowerCase()===comboId.toLowerCase());
-        if(combo){
-          opcao = combo.opcoes.find(o=> String(o.id)===String(opcaoId) || o.label===opcaoId || o.label.toLowerCase()===String(opcaoId).toLowerCase());
+      // 1. Tenta achar pelo label exato
+      for(const c of estoque){
+        if(comboId && c.id!==comboId && c.titulo!==comboId) {
+          // Se tem comboId, tenta filtrar mas não obriga
+          const maybe = c.opcoes.find(o=> o.label===opcaoLabel || o.label.toLowerCase()===opcaoLabel.toLowerCase() || String(o.id)===opcaoLabel);
+          if(maybe && (c.id===comboId || c.titulo.toLowerCase().includes(comboId.toLowerCase()) || comboId.toLowerCase().includes(c.titulo.toLowerCase()))){
+            combo=c; opcao=maybe; break;
+          }
+        }
+        const found = c.opcoes.find(o=> o.label===opcaoLabel || o.label.toLowerCase()===opcaoLabel.toLowerCase());
+        if(found){ combo=c; opcao=found; break; }
+      }
+      
+      // 2. Busca por ID também (compatibilidade)
+      if(!opcao){
+        for(const c of estoque){
+          const found = c.opcoes.find(o=> String(o.id)===String(opcaoLabel));
+          if(found){ combo=c; opcao=found; break; }
         }
       }
       
-      // 2. Se não achou, procura opcaoId em qualquer combo (ignora comboId)
+      // 3. Busca parcial (contém)
       if(!opcao){
         for(const c of estoque){
-          const found = c.opcoes.find(o=> String(o.id)===String(opcaoId) || o.label===opcaoId);
-          if(found){
-            combo = c;
-            opcao = found;
-            break;
-          }
-        }
-      }
-      
-      // 3. Último fallback: procura por label contendo o valor
-      if(!opcao){
-        for(const c of estoque){
-          const found = c.opcoes.find(o=> o.label.toLowerCase().includes(String(opcaoId).toLowerCase()));
-          if(found){
-            combo = c;
-            opcao = found;
-            break;
-          }
+          const found = c.opcoes.find(o=> opcaoLabel.toLowerCase().includes(o.label.toLowerCase()) || o.label.toLowerCase().includes(opcaoLabel.toLowerCase()));
+          if(found){ combo=c; opcao=found; break; }
         }
       }
       
       if(!combo || !opcao){
-        console.log('FALHA BUSCA:', comboId, opcaoId, 'estoque:', estoque.map(c=>c.id));
-        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Não consegui achar essa conta no estoque (ID: '+opcaoId+').\n> Isso acontece quando o painel é antigo.\n> **SOLUÇÃO:** Digite **/painel-vendas** para atualizar!',ephemeral:true});
+        console.log('FALHA BUSCA FINAL:', raw, 'tentou label:', opcaoLabel);
+        // NÃO mostra erro falso - tenta atualizar painel e mostra estoque real
+        await atualizarPainelUnico().catch(()=>{});
+        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL NO MOMENTO**\n\n> Não achei **'+opcaoLabel+'** no estoque atual.\n> O painel foi atualizado automaticamente.\n> Tente novamente no novo painel!',ephemeral:true});
       }
       
-      // SÓ mostra "esgotou" se realmente zerado
       if(!opcao.contas || opcao.contas.length===0){
         await atualizarPainelUnico().catch(()=>{});
-        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta **' + opcao.label + '** acabou de esgotar! 😢\n> Tente outra opção.',ephemeral:true});
+        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> **'+opcao.label+'** esgotou agora mesmo!\n> Escolha outra opção.',ephemeral:true});
       }
 
       const ticket=await interaction.guild.channels.create({
@@ -916,69 +928,80 @@ Garantia: 7 dias
       if(interaction.customId.startsWith('confirmar_pagamento_')){
         if(!isStaff(interaction)){
           return interaction.reply({ 
-            content: '⛔ **ACESSO NEGADO**\n\n> 🔒 Apenas membros com cargo <@&1552881282835288174> podem confirmar pagamentos e entregar contas.\n> Se você é cliente, aguarde um staff confirmar seu comprovante!', 
+            content: '⛔ **ACESSO NEGADO**\n\n> 🔒 Apenas staff pode confirmar.', 
             ephemeral: true 
           });
         }
-        // Novo formato com | para evitar bug de _ no ID - ULTRA ROBUSTO
-        let comboId, opcaoId;
         let rawPayload = interaction.customId.replace('confirmar_pagamento_','');
-        if(rawPayload.includes('|')){
-          [comboId, opcaoId] = rawPayload.split('|');
+        let comboId = null;
+        let opcaoLabel = rawPayload;
+        
+        // Suporta || e | e _
+        if(rawPayload.includes('||')){
+          const s = rawPayload.split('||');
+          comboId = s[0];
+          opcaoLabel = s[1];
+        } else if(rawPayload.includes('|')){
+          const s = rawPayload.split('|');
+          comboId = s[0];
+          opcaoLabel = s.slice(1).join('|');
         } else {
-          // fallback antigo com _ (para botões antigos que ainda existem)
-          const parts=rawPayload.split('_'); 
-          // comboId pode ter hífen, então junta tudo menos último
-          if(parts.length>=2){
-            opcaoId = parts[parts.length-1];
-            comboId = parts.slice(0, -1).join('_');
-            // Tenta também com hífen se não achar
-            if(comboId.includes('-')===false && rawPayload.includes('-')){
-              // tenta extrair combo-sanguine do meio
-              const match = rawPayload.match(/^(.*)_(.+)$/);
-              if(match){ comboId = match[1]; opcaoId = match[2]; }
+          // Formato antigo: combo-sanguine_1 ou combo-sanguine_1_label
+          // Tenta separar último _ como ID
+          const parts = rawPayload.split('_');
+          if(parts.length>1){
+            opcaoLabel = parts[parts.length-1];
+            comboId = parts.slice(0,-1).join('_');
+            // Se opcaoLabel for número, tenta achar por ID
+            // Se não, tenta achar por label que pode ter _
+            if(isNaN(opcaoLabel)){
+              // Pode ser label com _, então tenta achar label completo
+              // Procura no estoque por label que contém o raw
+              opcaoLabel = rawPayload;
+              comboId = null;
             }
-          } else {
-            opcaoId = rawPayload;
-            comboId = null;
           }
         }
         
-        console.log('CONFIRMAR PAGAMENTO:', comboId, opcaoId, 'raw:', rawPayload);
-        const estoque=carregar(); 
+        opcaoLabel = (opcaoLabel||'').trim();
+        if(comboId) comboId = comboId.trim();
+        console.log('CONFIRMAR:', comboId, opcaoLabel, 'raw:', rawPayload);
         
-        // Busca ultra robusta igual do comprar
+        const estoque=carregar();
         let combo = null;
         let opcao = null;
         
-        if(comboId){
-          combo = estoque.find(c=> c.id===comboId || c.id.toLowerCase()===comboId.toLowerCase());
+        // Busca por LABEL primeiro
+        for(const c of estoque){
+          const found = c.opcoes.find(o=> o.label===opcaoLabel || o.label.toLowerCase()===opcaoLabel.toLowerCase() || String(o.id)===String(opcaoLabel));
+          if(found){ combo=c; opcao=found; break; }
+        }
+        if(!opcao && comboId){
+          combo = estoque.find(c=> c.id===comboId || c.titulo===comboId || c.id.toLowerCase()===comboId.toLowerCase());
           if(combo){
-            opcao = combo.opcoes.find(o=> String(o.id)===String(opcaoId) || o.label===opcaoId);
+            opcao = combo.opcoes.find(o=> o.label===opcaoLabel || String(o.id)===String(opcaoLabel));
           }
         }
         if(!opcao){
           for(const c of estoque){
-            const found = c.opcoes.find(o=> String(o.id)===String(opcaoId) || o.label===opcaoId);
-            if(found){ combo=c; opcao=found; break; }
-          }
-        }
-        if(!opcao){
-          for(const c of estoque){
-            const found = c.opcoes.find(o=> o.label.toLowerCase().includes(String(opcaoId).toLowerCase()));
-            if(found){ combo=c; opcao=found; break; }
+            for(const o of c.opcoes){
+              if(rawPayload.toLowerCase().includes(o.label.toLowerCase()) || o.label.toLowerCase().includes(rawPayload.toLowerCase())){
+                combo=c; opcao=o; break;
+              }
+            }
+            if(opcao) break;
           }
         }
         
         if(!combo || !opcao){
-          console.log('FALHA CONFIRMAR:', comboId, opcaoId);
-          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n> Não achei essa conta (ID: '+opcaoId+').\n> O ticket é antigo. Crie um novo pedido no painel!', ephemeral: true});
+          console.log('FALHA CONFIRMAR FINAL:', rawPayload);
+          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n> Não achei essa conta no estoque atual.\n> Ticket antigo - peça para o cliente criar novo pedido!', ephemeral: true});
         }
         if(!opcao.contas || opcao.contas.length===0){
           await atualizarPainelUnico().catch(()=>{});
-          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta **'+opcao.label+'** acabou de esgotar!\n> Peça pro cliente escolher outra.', ephemeral: true});
+          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> **'+opcao.label+'** esgotou!\n> Avise o cliente para escolher outra.', ephemeral: true});
         }
-
+        
         // ===== ACHA O COMPRADOR DO TICKET =====
         let compradorId = null;
         // Tenta pegar pela permissão do canal (quem não é bot, everyone, nem staff)
