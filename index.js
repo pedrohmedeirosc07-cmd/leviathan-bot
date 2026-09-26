@@ -324,13 +324,30 @@ function acharCargoPorBusca(guild, termo){
 function isUrl(s){ try{ const u=new URL(s); return u.protocol==='http:'||u.protocol==='https:'; }catch{return false;} }
 function acharBannerLocal(){
   try{
-    if(fs.existsSync('./banner-leviathan.png')) return './banner-leviathan.png';
-    if(fs.existsSync('./banner-leviathan.webp')) return './banner-leviathan.webp';
-    if(fs.existsSync('./banner.png')) return './banner.png';
+    // Prioridade máxima para seu banner oficial
+    const candidatos = [
+      './banner-leviathan.webp',
+      './banner-leviathan.png',
+      './banner-leviathan-680x240.png',
+      './banner-leviathan-680x240-stretched.png',
+      './banner.png',
+      './banner.jpg'
+    ];
+    for(const p of candidatos){
+      if(fs.existsSync(p)){
+        console.log('✅ Banner local encontrado:', p);
+        return p;
+      }
+    }
     const arqs = fs.readdirSync('.');
     const b = arqs.find(f => f.toLowerCase().includes('banner') && (f.endsWith('.png')||f.endsWith('.webp')||f.endsWith('.jpg')||f.endsWith('.jpeg')));
-    if(b) return './'+b;
-  }catch{} return null;
+    if(b){
+      console.log('✅ Banner genérico encontrado:', b);
+      return './'+b;
+    }
+  }catch(e){ console.log('Erro acharBanner:', e.message); } 
+  console.log('⚠️ Nenhum banner local encontrado');
+  return null;
 }
 
 const commands = [
@@ -461,8 +478,16 @@ ${estoque.length===0 ? '> *Nenhum produto no momento - Aguarde restock*\n> Conta
    .setFooter({ text: `Leviathan Accounts • ${totalContas} contas disponíveis • Loja Oficial desde 2024`, iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
    .setTimestamp();
 
-  if(bannerAttachment) embedMain.setImage(bannerAttachment);
-  else if(estoque[0] && isUrl(estoque[0].banner)) embedMain.setImage(estoque[0].banner);
+  // SEMPRE usa banner local se existir - não usa mais imgur quebrado
+  if(bannerAttachment){
+    embedMain.setImage(bannerAttachment);
+  } else if(estoque[0] && isUrl(estoque[0].banner) && !estoque[0].banner.includes('8QJ4sQy')){
+    // Só usa URL se não for o imgur quebrado antigo
+    embedMain.setImage(estoque[0].banner);
+  } else if(bannerAttachment===null){
+    // Se não tem banner local nem URL válida, tenta achar de novo e avisa
+    console.log('⚠️ Sem banner para o painel - adicione banner-leviathan.png no GitHub');
+  }
 
   const embeds = [embedMain];
   // Embeds secundários REMOVIDOS conforme pedido do usuário - só painel principal agora
@@ -741,26 +766,62 @@ ${dados.compras.length>0 ? dados.compras.map(c=>`> ${c.produto} - R$ ${c.preco.t
     if(interaction.isStringSelectMenu() && interaction.customId==='comprar_select'){
       const raw = interaction.values[0];
       console.log('COMPRA TENTATIVA:', raw);
-      const [comboId,opcaoId]=raw.split('|'); 
-      const estoque=carregar();
-      console.log('ESTOQUE ATUAL:', JSON.stringify(estoque).slice(0,500));
-      const combo=estoque.find(c=>c.id===comboId);
-      if(!combo){
-        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Produto não encontrado. O painel pode estar desatualizado, digite /painel-vendas novamente.',ephemeral:true});
+      const parts = raw.split('|');
+      let comboId = parts[0];
+      let opcaoId = parts[1];
+      // Fallback se não tem | (formato antigo)
+      if(!opcaoId){
+        opcaoId = comboId;
+        comboId = null;
       }
-      // Busca robusta: tenta por ID exato, depois por ID string, depois por label
-      let opcao = combo.opcoes.find(o=>o.id===opcaoId);
-      if(!opcao) opcao = combo.opcoes.find(o=>String(o.id)===String(opcaoId));
-      if(!opcao) opcao = combo.opcoes.find(o=>o.label===opcaoId);
+      const estoque=carregar();
+      console.log('ESTOQUE ATUAL:', JSON.stringify(estoque).slice(0,800));
       
+      // Busca ultra robusta: procura em TODOS os combos
+      let combo = null;
+      let opcao = null;
+      
+      // 1. Tenta comboId + opcaoId exatos
+      if(comboId){
+        combo = estoque.find(c=>c.id===comboId || c.id.toLowerCase()===comboId.toLowerCase());
+        if(combo){
+          opcao = combo.opcoes.find(o=> String(o.id)===String(opcaoId) || o.label===opcaoId || o.label.toLowerCase()===String(opcaoId).toLowerCase());
+        }
+      }
+      
+      // 2. Se não achou, procura opcaoId em qualquer combo (ignora comboId)
       if(!opcao){
-        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Opção não encontrada. Painel desatualizado, peça para um staff dar /painel-vendas.',ephemeral:true});
+        for(const c of estoque){
+          const found = c.opcoes.find(o=> String(o.id)===String(opcaoId) || o.label===opcaoId);
+          if(found){
+            combo = c;
+            opcao = found;
+            break;
+          }
+        }
+      }
+      
+      // 3. Último fallback: procura por label contendo o valor
+      if(!opcao){
+        for(const c of estoque){
+          const found = c.opcoes.find(o=> o.label.toLowerCase().includes(String(opcaoId).toLowerCase()));
+          if(found){
+            combo = c;
+            opcao = found;
+            break;
+          }
+        }
+      }
+      
+      if(!combo || !opcao){
+        console.log('FALHA BUSCA:', comboId, opcaoId, 'estoque:', estoque.map(c=>c.id));
+        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Não consegui achar essa conta no estoque (ID: '+opcaoId+').\n> Isso acontece quando o painel é antigo.\n> **SOLUÇÃO:** Digite **/painel-vendas** para atualizar!',ephemeral:true});
       }
       
       // SÓ mostra "esgotou" se realmente zerado
       if(!opcao.contas || opcao.contas.length===0){
         await atualizarPainelUnico().catch(()=>{});
-        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta **' + opcao.label + '** acabou de esgotar! 😢\n> Tente outra opção ou volte mais tarde.',ephemeral:true});
+        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta **' + opcao.label + '** acabou de esgotar! 😢\n> Tente outra opção.',ephemeral:true});
       }
 
       const ticket=await interaction.guild.channels.create({
@@ -859,27 +920,63 @@ Garantia: 7 dias
             ephemeral: true 
           });
         }
-        // Novo formato com | para evitar bug de _ no ID
+        // Novo formato com | para evitar bug de _ no ID - ULTRA ROBUSTO
         let comboId, opcaoId;
-        if(interaction.customId.includes('|')){
-          const payload = interaction.customId.replace('confirmar_pagamento_','');
-          [comboId, opcaoId] = payload.split('|');
+        let rawPayload = interaction.customId.replace('confirmar_pagamento_','');
+        if(rawPayload.includes('|')){
+          [comboId, opcaoId] = rawPayload.split('|');
         } else {
-          // fallback antigo com _
-          const parts=interaction.customId.split('_'); comboId=parts[2]; opcaoId=parts.slice(3).join('_');
+          // fallback antigo com _ (para botões antigos que ainda existem)
+          const parts=rawPayload.split('_'); 
+          // comboId pode ter hífen, então junta tudo menos último
+          if(parts.length>=2){
+            opcaoId = parts[parts.length-1];
+            comboId = parts.slice(0, -1).join('_');
+            // Tenta também com hífen se não achar
+            if(comboId.includes('-')===false && rawPayload.includes('-')){
+              // tenta extrair combo-sanguine do meio
+              const match = rawPayload.match(/^(.*)_(.+)$/);
+              if(match){ comboId = match[1]; opcaoId = match[2]; }
+            }
+          } else {
+            opcaoId = rawPayload;
+            comboId = null;
+          }
         }
+        
+        console.log('CONFIRMAR PAGAMENTO:', comboId, opcaoId, 'raw:', rawPayload);
         const estoque=carregar(); 
-        const combo=estoque.find(c=>c.id===comboId);
-        if(!combo){
-          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n> Produto não encontrado (painel desatualizado). Digite /painel-vendas novamente.', ephemeral: true});
+        
+        // Busca ultra robusta igual do comprar
+        let combo = null;
+        let opcao = null;
+        
+        if(comboId){
+          combo = estoque.find(c=> c.id===comboId || c.id.toLowerCase()===comboId.toLowerCase());
+          if(combo){
+            opcao = combo.opcoes.find(o=> String(o.id)===String(opcaoId) || o.label===opcaoId);
+          }
         }
-        let opcao = combo.opcoes.find(o=>o.id===opcaoId);
-        if(!opcao) opcao = combo.opcoes.find(o=>String(o.id)===String(opcaoId));
         if(!opcao){
-          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n> Opção não encontrada.', ephemeral: true});
+          for(const c of estoque){
+            const found = c.opcoes.find(o=> String(o.id)===String(opcaoId) || o.label===opcaoId);
+            if(found){ combo=c; opcao=found; break; }
+          }
+        }
+        if(!opcao){
+          for(const c of estoque){
+            const found = c.opcoes.find(o=> o.label.toLowerCase().includes(String(opcaoId).toLowerCase()));
+            if(found){ combo=c; opcao=found; break; }
+          }
+        }
+        
+        if(!combo || !opcao){
+          console.log('FALHA CONFIRMAR:', comboId, opcaoId);
+          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n> Não achei essa conta (ID: '+opcaoId+').\n> O ticket é antigo. Crie um novo pedido no painel!', ephemeral: true});
         }
         if(!opcao.contas || opcao.contas.length===0){
-          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta **'+opcao.label+'** acabou de esgotar!\n> Use /painel-vendas para atualizar o painel.', ephemeral: true});
+          await atualizarPainelUnico().catch(()=>{});
+          return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta **'+opcao.label+'** acabou de esgotar!\n> Peça pro cliente escolher outra.', ephemeral: true});
         }
 
         // ===== ACHA O COMPRADOR DO TICKET =====
