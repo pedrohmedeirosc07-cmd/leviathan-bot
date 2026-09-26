@@ -453,29 +453,7 @@ ${estoque.length===0 ? '> *Nenhum produto no momento - Aguarde restock*\n> Conta
   else if(estoque[0] && isUrl(estoque[0].banner)) embedMain.setImage(estoque[0].banner);
 
   const embeds = [embedMain];
-
-  // Embeds secundários para cada produto com imagem individual (profissional)
-  if(estoque.length>0){
-    estoque.slice(0,3).forEach(c=>{
-      const total = c.opcoes.reduce((a,b)=>a+b.contas.length,0);
-      const e = new EmbedBuilder()
-       .setColor(total===0 ? 0x2b2d31 : 0x00ff7f)
-       .setTitle(`${c.titulo.toUpperCase()}`)
-       .setDescription(
-`> **Status:** ${total===0 ? '🔴 ESGOTADO' : `🟢 ${total} em estoque`}
-> **Variações:** ${c.opcoes.length} planos
-
-${c.opcoes.map(o=>{
-  const st = o.contas.length===0 ? '🔴' : '🟢';
-  return `${st} **${o.label}** — \`R$ ${o.preco}\` • ${o.contas.length} unid.`;
-}).join('\n')}
-`
-       )
-       .setFooter({ text: `${c.titulo} • Clique no menu abaixo para comprar` });
-      if(isUrl(c.banner)) e.setThumbnail(c.banner);
-      embeds.push(e);
-    });
-  }
+  // Embeds secundários REMOVIDOS conforme pedido do usuário - só painel principal agora
 
   const components = [];
   
@@ -749,9 +727,29 @@ ${dados.compras.length>0 ? dados.compras.map(c=>`> ${c.produto} - R$ ${c.preco.t
     }
 
     if(interaction.isStringSelectMenu() && interaction.customId==='comprar_select'){
-      const [comboId,opcaoId]=interaction.values[0].split('|'); 
-      const estoque=carregar(); const combo=estoque.find(c=>c.id===comboId); const opcao=combo?.opcoes.find(o=>o.id===opcaoId);
-      if(!opcao || opcao.contas.length<=0) return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta acabou de esgotar! Tente outra opção.',ephemeral:true});
+      const raw = interaction.values[0];
+      console.log('COMPRA TENTATIVA:', raw);
+      const [comboId,opcaoId]=raw.split('|'); 
+      const estoque=carregar();
+      console.log('ESTOQUE ATUAL:', JSON.stringify(estoque).slice(0,500));
+      const combo=estoque.find(c=>c.id===comboId);
+      if(!combo){
+        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Produto não encontrado. O painel pode estar desatualizado, digite /painel-vendas novamente.',ephemeral:true});
+      }
+      // Busca robusta: tenta por ID exato, depois por ID string, depois por label
+      let opcao = combo.opcoes.find(o=>o.id===opcaoId);
+      if(!opcao) opcao = combo.opcoes.find(o=>String(o.id)===String(opcaoId));
+      if(!opcao) opcao = combo.opcoes.find(o=>o.label===opcaoId);
+      
+      if(!opcao){
+        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Opção não encontrada. Painel desatualizado, peça para um staff dar /painel-vendas.',ephemeral:true});
+      }
+      
+      // SÓ mostra "esgotou" se realmente zerado
+      if(!opcao.contas || opcao.contas.length===0){
+        await atualizarPainelUnico().catch(()=>{});
+        return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> Essa conta **' + opcao.label + '** acabou de esgotar! 😢\n> Tente outra opção ou volte mais tarde.',ephemeral:true});
+      }
 
       const ticket=await interaction.guild.channels.create({
         name:`🛒・${interaction.user.username}-${opcao.label.toLowerCase().replace(/[^a-z0-9]/g,'-')}`.slice(0,90),
