@@ -26,8 +26,63 @@ const CARGOS_CLIENTE = [
 try {
   const express = require('express');
   const app = express();
-  app.get('/', (req, res) => res.send('Leviathan Professional ON'));
-  app.listen(process.env.PORT || 3000, () => console.log('🚀 Server ON'));
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+  
+  app.get('/', (req, res) => res.send('Leviathan Professional ON - Bot Online ✅'));
+
+  // PAINEL WEB FÁCIL - acesse https://seu-bot.onrender.com/admin
+  app.get('/admin', (req, res) => {
+    const estoque = carregar();
+    let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Leviathan Admin</title>
+    <style>body{font-family:Arial;background:#0f0f0f;color:#fff;padding:20px} .card{background:#1e1e1e;padding:20px;border-radius:12px;margin-bottom:20px;border:1px solid #333} input,textarea{width:100%;padding:10px;margin:5px 0;border-radius:8px;border:1px solid #444;background:#111;color:#fff} button{background:#FFD700;color:#000;font-weight:bold;padding:12px 20px;border:none;border-radius:8px;cursor:pointer;width:100%} button:hover{background:#ffea00} .prod{background:#252525;padding:15px;border-radius:8px;margin:10px 0} .ok{color:#00ff7f} .off{color:#ff4444}</style></head><body>
+    <h1>🔥 Leviathan Admin - Adicionar Produto FÁCIL</h1>
+    <div class="card"><h2>➕ Adicionar Produto Completo (Mais Fácil)</h2>
+    <form method="POST" action="/admin/add">
+      <label>ID do Produto (ex: sanguine-vip)</label><input name="id" required placeholder="sanguine-vip">
+      <label>Título (ex: SANGUINE ART)</label><input name="titulo" required placeholder="SANGUINE ART">
+      <label>Banner URL (https://i.imgur.com/...)</label><input name="banner" required placeholder="https://i.imgur.com/xxx.png">
+      <label>Nome do Plano (ex: SANGUINE + CDK)</label><input name="plano" required placeholder="SANGUINE + CDK">
+      <label>Preço (ex: 9,99)</label><input name="preco" required placeholder="9,99">
+      <label>Contas (cole uma por linha: email:senha)</label><textarea name="contas" rows="8" required placeholder="conta1@gmail.com:senha123&#10;conta2@gmail.com:senha456"></textarea>
+      <button type="submit">🚀 CRIAR PRODUTO AGORA</button>
+    </form></div>
+    <div class="card"><h2>📦 Estoque Atual: ${estoque.reduce((a,c)=>a+c.opcoes.reduce((x,y)=>x+y.contas.length,0),0)} contas</h2>`;
+    estoque.forEach(c=>{
+      html+=`<div class="prod"><b>${c.titulo}</b> (ID: ${c.id}) - ${c.banner}<br>`;
+      c.opcoes.forEach(o=>{
+        html+=`&nbsp;&nbsp; ${o.contas.length>0?'<span class=ok>🟢</span>':'<span class=off>🔴</span>'} <b>${o.label}</b> - R$ ${o.preco} - ${o.contas.length} unid.<br>`;
+      });
+      html+=`</div>`;
+    });
+    html+=`</div></body></html>`;
+    res.send(html);
+  });
+
+  app.post('/admin/add', (req, res) => {
+    try{
+      const {id, titulo, banner, plano, preco, contas} = req.body;
+      const estoque = carregar();
+      let combo = estoque.find(c=>c.id===id);
+      if(!combo){
+        combo = {id, titulo, banner, opcoes:[]};
+        estoque.push(combo);
+      }
+      let opcao = combo.opcoes.find(o=>o.label===plano);
+      if(!opcao){
+        opcao = {id: String(Date.now()), label: plano, preco, contas:[]};
+        combo.opcoes.push(opcao);
+      } else {
+        opcao.preco = preco;
+      }
+      const lista = (contas||'').split(/\n|\r| |,|;/).map(s=>s.trim()).filter(Boolean).filter(s=>s.includes(':')||s.includes('@'));
+      opcao.contas.push(...lista);
+      salvar(estoque);
+      res.send('<h1>✅ Produto adicionado!</h1><p>'+lista.length+' contas adicionadas em '+plano+'</p><a href="/admin">Voltar</a> - Agora digite /painel-vendas no Discord para atualizar');
+    }catch(e){ res.send('Erro: '+e.message); }
+  });
+
+  app.listen(process.env.PORT || 3000, () => console.log('🚀 Server ON + Admin em /admin'));
 } catch {}
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages] });
@@ -101,6 +156,21 @@ const commands = [
     new SlashCommandBuilder().setName('saldo-cliente').setDescription('Ver quanto cliente gastou e cargo').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
      .addUserOption(o => o.setName('usuario').setDescription('Usuario para ver saldo').setRequired(true)),
     new SlashCommandBuilder().setName('meu-saldo').setDescription('Ver seu total gasto e cargo atual'),
+    new SlashCommandBuilder().setName('add-rapido').setDescription('🔥 ADICIONA PRODUTO COMPLETO DE UMA VEZ (MAIS FÁCIL)').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+     .addStringOption(o => o.setName('id').setDescription('ID ex: sanguine-vip').setRequired(true))
+     .addStringOption(o => o.setName('titulo').setDescription('Título ex: SANGUINE ART').setRequired(true))
+     .addStringOption(o => o.setName('banner').setDescription('Link da imagem https').setRequired(true))
+     .addStringOption(o => o.setName('plano').setDescription('Nome do plano ex: SANGUINE + CDK').setRequired(true))
+     .addStringOption(o => o.setName('preco').setDescription('Preço ex: 9,99').setRequired(true))
+     .addStringOption(o => o.setName('contas').setDescription('Cole as contas SEPARADAS POR ESPAÇO: email:senha email2:senha2').setRequired(true)),
+    new SlashCommandBuilder().setName('importar-lote').setDescription('📥 Importa VÁRIAS contas de uma vez (cola lista)').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+     .addStringOption(o => o.setName('combo_id').setDescription('ID do produto existente').setRequired(true))
+     .addStringOption(o => o.setName('label').setDescription('Label exata do plano').setRequired(true))
+     .addStringOption(o => o.setName('contas').setDescription('Cole VÁRIAS contas: uma por linha OU separadas por espaço').setRequired(true)),
+    new SlashCommandBuilder().setName('editar-preco').setDescription('💲 Edita preço rápido').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+     .addStringOption(o => o.setName('combo_id').setDescription('ID do produto').setRequired(true))
+     .addStringOption(o => o.setName('label').setDescription('Label do plano').setRequired(true))
+     .addStringOption(o => o.setName('novo_preco').setDescription('Novo preço ex: 15,99').setRequired(true)),
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -328,6 +398,69 @@ ${CARGOS_CLIENTE.slice().reverse().map(c=>`${dados.totalGasto >= c.minimo ? '✅
         await interaction.deferReply({ephemeral:true});
         fs.writeFileSync(ESTOQUE_FILE,'[]'); await atualizarPainelUnico();
         return interaction.followUp({content:'✅ Limpo!',ephemeral:true});
+      }
+      if(interaction.commandName==='add-rapido'){
+        await interaction.deferReply({ephemeral:true});
+        const id = interaction.options.getString('id').toLowerCase().replace(/[^a-z0-9-]/g,'-');
+        const titulo = interaction.options.getString('titulo');
+        const banner = interaction.options.getString('banner');
+        const plano = interaction.options.getString('plano');
+        const preco = interaction.options.getString('preco');
+        const contasRaw = interaction.options.getString('contas');
+        const estoque = carregar();
+        let combo = estoque.find(c=>c.id===id);
+        if(!combo){
+          combo = {id, titulo, banner, opcoes:[]};
+          estoque.push(combo);
+        } else {
+          combo.titulo = titulo;
+          combo.banner = banner;
+        }
+        let opcao = combo.opcoes.find(o=>o.label.toLowerCase()===plano.toLowerCase());
+        if(!opcao){
+          opcao = {id: Date.now().toString(), label: plano, preco, contas:[]};
+          combo.opcoes.push(opcao);
+        } else {
+          opcao.preco = preco;
+        }
+        const lista = contasRaw.split(/\n| |,|;/).map(s=>s.trim()).filter(Boolean);
+        const validas = lista.filter(s=>s.includes(':'));
+        opcao.contas.push(...validas);
+        salvar(estoque);
+        await atualizarPainelUnico();
+        return interaction.followUp({content:`✅ **PRODUTO CRIADO RÁPIDO!**\n**${titulo}** > **${plano}** - R$ ${preco}\n📦 ${validas.length} contas adicionadas (total: ${opcao.contas.length})\nID: ${id}`,ephemeral:true});
+      }
+      if(interaction.commandName==='importar-lote'){
+        await interaction.deferReply({ephemeral:true});
+        const comboId = interaction.options.getString('combo_id');
+        const label = interaction.options.getString('label');
+        const contasRaw = interaction.options.getString('contas');
+        const estoque = carregar();
+        const combo = estoque.find(c=>c.id===comboId);
+        if(!combo) return interaction.followUp({content:'❌ Produto ID não existe. Use /ver-estoque para ver IDs',ephemeral:true});
+        const opcao = combo.opcoes.find(o=>o.label===label || o.label.toLowerCase()===label.toLowerCase());
+        if(!opcao) return interaction.followUp({content:`❌ Plano não encontrado. Planos disponíveis: ${combo.opcoes.map(o=>o.label).join(' | ')}`,ephemeral:true});
+        const lista = contasRaw.split(/\n|\r/).flatMap(l=>l.split(/[ ,;]+/)).map(s=>s.trim()).filter(Boolean).filter(s=>s.includes(':'));
+        if(lista.length===0) return interaction.followUp({content:'❌ Nenhuma conta válida encontrada. Use formato email:senha',ephemeral:true});
+        opcao.contas.push(...lista);
+        salvar(estoque);
+        await atualizarPainelUnico();
+        return interaction.followUp({content:`✅ **${lista.length} contas importadas!**\nPlano: **${label}** - Agora tem **${opcao.contas.length}** unidades\nEx: ${lista[0]}`,ephemeral:true});
+      }
+      if(interaction.commandName==='editar-preco'){
+        await interaction.deferReply({ephemeral:true});
+        const comboId = interaction.options.getString('combo_id');
+        const label = interaction.options.getString('label');
+        const novo = interaction.options.getString('novo_preco');
+        const estoque = carregar();
+        const combo = estoque.find(c=>c.id===comboId);
+        if(!combo) return interaction.followUp({content:'❌ ID não existe',ephemeral:true});
+        const opcao = combo.opcoes.find(o=>o.label===label);
+        if(!opcao) return interaction.followUp({content:`❌ Plano não existe. Disponíveis: ${combo.opcoes.map(o=>o.label).join(', ')}`,ephemeral:true});
+        opcao.preco = novo;
+        salvar(estoque);
+        await atualizarPainelUnico();
+        return interaction.followUp({content:`✅ Preço de **${label}** alterado para **R$ ${novo}**`,ephemeral:true});
       }
       if(interaction.commandName==='saldo-cliente'){
         await interaction.deferReply({ephemeral:true});
