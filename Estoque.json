@@ -1,0 +1,34 @@
+[
+  {
+    "id": "combo-sanguine",
+    "titulo": "SANGUINE ART",
+    "banner": "https://i.imgur.com/8QJ4sQy.png",
+    "opcoes": [
+      {
+        "id": "1",
+        "label": "SANGUINE ART + CDK",
+        "preco": "9,99",
+        "contas": [
+          "conta1.leviathan@gmail.com:Leviathan123 - CONTA FAKE 1",
+          "conta2.leviathan@gmail.com:Leviathan456 - CONTA FAKE 2"
+        ]
+      },
+      {
+        "id": "2",
+        "label": "SANGUINE ART + GOD HUMAN",
+        "preco": "12,50",
+        "contas": [
+          "conta3.leviathan@gmail.com:Leviathan789 - CONTA FAKE 3"
+        ]
+      },
+      {
+        "id": "3",
+        "label": "GOD HUMAN + TTK",
+        "preco": "7,99",
+        "contas": [
+          "conta4.leviathan@gmail.com:Leviathan000 - CONTA FAKE 4"
+        ]
+      }
+    ]
+  }
+]

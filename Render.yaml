@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: leviathan-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: GUILD_ID
+        sync: false
+      - key: STAFF_ROLE_ID
+        value: 1552881282835288174
+      - key: CATEGORIA_TICKET_ID
+        value: 1553104636334964756
+      - key: CANAL_VENDAS_ID
+        value: 1552702271744254002
+      - key: PIX_KEY
+        sync: false
+      - key: PIX_NOME
+        value: Leviathan Accounts
+      - key: CARGO_CLIENTE_ID
+        sync: false
+      - key: CARGO_VIP_ID
+        sync: false
+      - key: CARGO_MEGA_ID
+        sync: false
+      - key: CARGO_ULTRA_ID
+        sync: false
+      - key: CARGO_ETERNO_ID
+        sync: false
