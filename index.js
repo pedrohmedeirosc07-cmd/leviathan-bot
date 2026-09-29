@@ -4,9 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, PermissionFlagsBits, ChannelType, REST, Routes, AttachmentBuilder } = require('discord.js');
 
-const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || '1552881282835288174';
-const CATEGORIA_TICKET_ID = process.env.CATEGORIA_TICKET_ID || '1553104636334964756';
-const CANAL_VENDAS_ID = process.env.CANAL_VENDAS_ID || '1552702271744254002';
+const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || null;
+const CATEGORIA_TICKET_ID = process.env.CATEGORIA_TICKET_ID || null;
+const CANAL_VENDAS_ID = process.env.CANAL_VENDAS_ID || null;
 const PIX_KEY = process.env.PIX_KEY || 'SUA_CHAVE_ALEATORIA_AQUI';
 const PIX_NOME = process.env.PIX_NOME || 'Leviathan Accounts';
 const ESTOQUE_FILE = './estoque.json';
@@ -388,47 +388,28 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
-// ===== PROTEÇÃO: SÓ SEU SERVER PODE USAR O BOT =====
-const ALLOWED_GUILDS = (process.env.GUILD_ID || '').split(',').filter(Boolean);
-// Se não definir GUILD_ID no .env, vai pegar automaticamente o primeiro server que já está e travar nele
-
 client.once('ready', async () => {
     console.log(`✅ LEVIATHAN PROFISSIONAL LOGADO COMO ${client.user.tag}`);
+    console.log(`📊 Bot está em ${client.guilds.cache.size} servidor(es): ${[...client.guilds.cache.values()].map(g=>`${g.name} (${g.id})`).join(', ')}`);
     
-    // Se GUILD_ID não foi definido, define automaticamente com os servers atuais (primeira vez)
-    if(ALLOWED_GUILDS.length===0){
-      console.log(`⚠️ GUILD_ID não definido no .env - Bot vai funcionar no(s) servidor(es) atual(is): ${[...client.guilds.cache.values()].map(g=>g.id).join(', ')}`);
-      console.log(`🔒 Para travar, coloque GUILD_ID=${[...client.guilds.cache.values()].map(g=>g.id).join(',')} no .env do Render`);
-    }
-
     for (const g of client.guilds.cache.values()) {
-        // Se tem lista de permitidos e esse não está na lista, sai
-        if(ALLOWED_GUILDS.length>0 && !ALLOWED_GUILDS.includes(g.id)){
-          console.log(`🚫 Servidor não autorizado ${g.name} (${g.id}) - Saindo...`);
-          try{ await g.leave(); }catch{}
-          continue;
+        try {
+          await rest.put(Routes.applicationGuildCommands(client.user.id, g.id), { body: commands });
+          console.log(`✅ Comandos registrados em: ${g.name}`);
+        } catch(e) {
+          console.log(`❌ Erro ao registrar comandos em ${g.name}: ${e.message}`);
         }
-        await rest.put(Routes.applicationGuildCommands(client.user.id, g.id), { body: commands });
     }
-    console.log('✅ DESIGN PROFISSIONAL ATIVO - PROTEÇÃO ANTI-CLONE ATIVA');
+    console.log('✅ BOT ONLINE - SEM PROTEÇÃO DE SAÍDA (pode usar em qualquer servidor)');
 });
 
-// Se alguém tentar adicionar o bot em outro server, ele sai automaticamente
 client.on('guildCreate', async (guild) => {
-  if(ALLOWED_GUILDS.length===0){
-    console.log(`⚠️ Bot adicionado em ${guild.name} (${guild.id}) - Como GUILD_ID não está definido, vou permitir por enquanto`);
-    console.log(`🔒 Defina GUILD_ID no .env para travar apenas no seu server`);
-    try{
-      await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: commands });
-    }catch{}
-    return;
-  }
-  if(!ALLOWED_GUILDS.includes(guild.id)){
-    console.log(`🚫 TENTATIVA DE ROUBO! Bot adicionado em servidor não autorizado: ${guild.name} (${guild.id}) - SAINDO AUTOMATICAMENTE`);
-    try{
-      await guild.systemChannel?.send('🚫 **Este bot é privado do Leviathan Accounts e não pode ser usado em outros servidores!** Saindo...');
-    }catch{}
-    await guild.leave().catch(()=>{});
+  console.log(`🎉 Bot adicionado em novo servidor: ${guild.name} (${guild.id})`);
+  try{
+    await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: commands });
+    console.log(`✅ Comandos registrados no novo servidor: ${guild.name}`);
+  }catch(e){
+    console.log(`❌ Erro ao registrar no novo servidor: ${e.message}`);
   }
 });
 
