@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "antiPalavrao": true,
+  "antiLink": true,
+  "antiInvite": true,
+  "antiSpam": true,
+  "antiFlood": true,
+  "antiEveryone": true,
+  "muteTime": 5,
+  "maxWarnings": 3,
+  "ignoreChannels": [],
+  "ignoreRoles": []
+}
