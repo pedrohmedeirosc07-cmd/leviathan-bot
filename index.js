@@ -7,11 +7,13 @@ const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectM
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || null;
 const CATEGORIA_TICKET_ID = process.env.CATEGORIA_TICKET_ID || null;
 const CANAL_VENDAS_ID = process.env.CANAL_VENDAS_ID || null;
+const CANAL_AVALIACOES_ID = process.env.CANAL_AVALIACOES_ID || null;
 const PIX_KEY = process.env.PIX_KEY || 'SUA_CHAVE_ALEATORIA_AQUI';
 const PIX_NOME = process.env.PIX_NOME || 'Leviathan Accounts';
 const ESTOQUE_FILE = './estoque.json';
 const PAINEL_FILE = './painel.json';
 const CLIENTES_FILE = './clientes.json';
+const AVALIACOES_FILE = './avaliacoes.json';
 
 // ===== SISTEMA DE CARGOS AUTOMÁTICOS POR VALOR GASTO - VALORES ATUALIZADOS =====
 const CARGOS_CLIENTE = [
@@ -362,6 +364,11 @@ function carregarClientes(){
   try { return JSON.parse(fs.readFileSync(CLIENTES_FILE,'utf8')); } catch { return {}; }
 }
 function salvarClientes(d){ fs.writeFileSync(CLIENTES_FILE, JSON.stringify(d,null,2)); }
+function carregarAvaliacoes(){
+  if(!fs.existsSync(AVALIACOES_FILE)) { fs.writeFileSync(AVALIACOES_FILE, '[]'); return []; }
+  try { return JSON.parse(fs.readFileSync(AVALIACOES_FILE,'utf8')); } catch { return []; }
+}
+function salvarAvaliacoes(d){ fs.writeFileSync(AVALIACOES_FILE, JSON.stringify(d,null,2)); }
 function isStaff(i) { return i.member?.roles?.cache?.has(STAFF_ROLE_ID); }
 function getCargoPorValor(total){
   for(const cargo of CARGOS_CLIENTE){
@@ -419,6 +426,11 @@ function acharBannerLocal(){
 
 const commands = [
     new SlashCommandBuilder().setName('painel-vendas').setDescription('Envia painel profissional Leviathan').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    new SlashCommandBuilder().setName('setup-tickets').setDescription('🎫 Cria painel de tickets profissional (estilo loja gringa)').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+     .addChannelOption(o => o.setName('canal').setDescription('Canal onde vai o painel de tickets').setRequired(false))
+     .addChannelOption(o => o.setName('categoria').setDescription('Categoria onde os tickets serão criados').setRequired(false))
+     .addRoleOption(o => o.setName('cargo_staff').setDescription('Cargo da equipe que vê os tickets').setRequired(false)),
+    new SlashCommandBuilder().setName('painel-tickets').setDescription('🎫 Envia painel de tickets simples (alternativo)').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
     new SlashCommandBuilder().setName('criar-combo').setDescription('Cria produto profissional').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
      .addStringOption(o => o.setName('id').setDescription('ID ex: sanguine-vip').setRequired(true))
      .addStringOption(o => o.setName('titulo').setDescription('Titulo ex: SANGUINE ART').setRequired(true))
@@ -451,6 +463,13 @@ const commands = [
      .addStringOption(o => o.setName('combo_id').setDescription('ID do produto').setRequired(true))
      .addStringOption(o => o.setName('label').setDescription('Label do plano').setRequired(true))
      .addStringOption(o => o.setName('novo_preco').setDescription('Novo preço ex: 15,99').setRequired(true)),
+    new SlashCommandBuilder().setName('ticket-add').setDescription('👤 Adiciona usuário ao ticket').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+     .addUserOption(o => o.setName('usuario').setDescription('Usuário para adicionar').setRequired(true)),
+    new SlashCommandBuilder().setName('ticket-remove').setDescription('👤 Remove usuário do ticket').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+     .addUserOption(o => o.setName('usuario').setDescription('Usuário para remover').setRequired(true)),
+    new SlashCommandBuilder().setName('ticket-transcript').setDescription('📋 Gera transcript do ticket').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
+    new SlashCommandBuilder().setName('fechar').setDescription('🔒 Fecha o ticket atual'),
+    new SlashCommandBuilder().setName('ver-avaliacoes').setDescription('⭐ Ver estatísticas de avaliações').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -616,10 +635,202 @@ async function atualizarPainelUnico(){
   }catch{}
 }
 
+// ===== SISTEMA DE TICKETS PROFISSIONAL LEVIATHAN =====
+const TICKET_TYPES = {
+  compra: { label: '🛒 Comprar Conta', emoji: '🛒', desc: 'Quero comprar uma conta', color: 0xFFD700 },
+  suporte: { label: '🎫 Suporte', emoji: '🎫', desc: 'Problema com minha conta', color: 0xFF4444 },
+  duvida: { label: '❓ Dúvidas', emoji: '❓', desc: 'Tirar dúvidas gerais', color: 0x00AAFF },
+  parceria: { label: '🤝 Parceria', emoji: '🤝', desc: 'Quero ser parceiro', color: 0x00FF7F },
+  reembolso: { label: '💸 Reembolso', emoji: '💸', desc: 'Solicitar reembolso/troca', color: 0xFF8C00 }
+};
+
+function gerarPainelTicketsProfissional(){
+  const embed = new EmbedBuilder()
+    .setColor(0x0a0a0a)
+    .setAuthor({ name: 'LEVIATHAN ACCOUNTS • CENTRAL DE ATENDIMENTO', iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
+    .setTitle('🎫 SISTEMA DE TICKETS • LEVIATHAN ACCOUNTS')
+    .setDescription(
+`### 💎 BEM-VINDO A CENTRAL DE ATENDIMENTO OFICIAL
+
+> A loja mais confiável de Blox Fruits do Brasil
+> Suporte rápido, atendimento premium 24/7
+
+**📋 COMO FUNCIONA:**
+> 1️⃣ Clique no botão abaixo de acordo com sua necessidade
+> 2️⃣ Um canal privado será criado só pra você
+> 3️⃣ Nossa equipe vai te atender em até 5 minutos
+> 4️⃣ Após resolver, o ticket será fechado automaticamente
+
+**⚡ TEMPO MÉDIO DE RESPOSTA:** \`2 minutos\`
+**🛡️ EQUIPE ONLINE:** <@&${STAFF_ROLE_ID || 'STAFF'}>
+**⭐ AVALIAÇÃO:** \`5.0/5.0 • 1000+ atendimentos\`
+
+---
+**👇 SELECIONE O TIPO DE ATENDIMENTO:**
+`
+    )
+    .addFields(
+      { name: '🛒 Comprar Conta', value: 'Quero comprar\nEntrega 5s', inline: true },
+      { name: '🎫 Suporte', value: 'Problema com conta\nResolvemos rápido', inline: true },
+      { name: '❓ Dúvidas', value: 'Tirar dúvidas\nSobre produtos', inline: true },
+      { name: '🤝 Parceria', value: 'Ser parceiro\nGanhe dinheiro', inline: true },
+      { name: '💸 Reembolso', value: 'Troca / Garantia\n7 dias garantia', inline: true },
+      { name: '⚡ Status', value: 'Online 24/7\nResposta imediata', inline: true }
+    )
+    .setFooter({ text: 'Leviathan Accounts • Sistema de tickets profissional • Desde 2024', iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
+    .setTimestamp();
+
+  const row1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ticket_create_compra').setLabel('Comprar Conta').setStyle(ButtonStyle.Success).setEmoji('🛒'),
+    new ButtonBuilder().setCustomId('ticket_create_suporte').setLabel('Suporte').setStyle(ButtonStyle.Danger).setEmoji('🎫'),
+    new ButtonBuilder().setCustomId('ticket_create_duvida').setLabel('Dúvidas').setStyle(ButtonStyle.Primary).setEmoji('❓')
+  );
+  const row2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ticket_create_parceria').setLabel('Parceria').setStyle(ButtonStyle.Secondary).setEmoji('🤝'),
+    new ButtonBuilder().setCustomId('ticket_create_reembolso').setLabel('Reembolso').setStyle(ButtonStyle.Secondary).setEmoji('💸')
+  );
+
+  return { embeds: [embed], components: [row1, row2] };
+}
+
+async function criarTicketProfissional(interaction, tipo){
+  const config = TICKET_TYPES[tipo];
+  if(!config) return interaction.reply({ content: '❌ Tipo de ticket inválido', ephemeral: true });
+
+  // Verifica se já tem ticket aberto desse tipo
+  try {
+    const canaisExistentes = interaction.guild.channels.cache.filter(c => 
+      c.type === ChannelType.GuildText &&
+      c.name.startsWith(`🎫・${interaction.user.username.toLowerCase().slice(0,8)}`) &&
+      c.parentId === (CATEGORIA_TICKET_ID || null)
+    );
+    if(canaisExistentes.size >= 2){
+      return interaction.reply({ content: `⚠️ Você já tem **${canaisExistentes.size} tickets** abertos!\n> Feche um ticket antes de abrir outro: ${canaisExistentes.map(c=>`${c}`).join(', ')}`, ephemeral: true });
+    }
+  } catch{}
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const nomeCanal = `🎫・${tipo}-${interaction.user.username}`.toLowerCase().replace(/[^a-z0-9-・]/g, '-').slice(0,90);
+
+  const ticket = await interaction.guild.channels.create({
+    name: nomeCanal,
+    type: ChannelType.GuildText,
+    parent: CATEGORIA_TICKET_ID || undefined,
+    topic: `Ticket de ${config.label} | Criado por ${interaction.user.tag} (${interaction.user.id}) | Tipo: ${tipo}`,
+    permissionOverwrites: [
+      { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+      { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks] },
+      ...(STAFF_ROLE_ID ? [{ id: STAFF_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ManageChannels] }] : [])
+    ]
+  });
+
+  const embedWelcome = new EmbedBuilder()
+    .setColor(config.color)
+    .setAuthor({ name: `LEVIATHAN ACCOUNTS • ${config.label.toUpperCase()}`, iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
+    .setTitle(`${config.emoji} Ticket de ${config.label} criado!`)
+    .setDescription(
+`**Olá ${interaction.user}! Bem-vindo ao seu ticket privado.**
+
+> **Tipo:** \`${config.label}\`
+> **Criado em:** <t:${Math.floor(Date.now()/1000)}:F>
+> **Cliente:** ${interaction.user} (\`${interaction.user.id}\`)
+
+${tipo === 'compra' ? `
+**🛒 VOCÊ QUER COMPRAR?**
+> Digite qual conta você quer:
+> Ex: \`SANGUINE ART + CDK\` ou \`GOD HUMAN\`
+> Nossa equipe vai te atender com o Pix e entrega
+
+**📦 Estoque atual:** Use \`/ver-estoque\` (staff)
+` : tipo === 'suporte' ? `
+**🎫 SUPORTE TÉCNICO**
+> Descreva seu problema com detalhes:
+> - Qual conta comprou?
+> - Qual erro aparece?
+> - Print do erro ajuda muito!
+
+**⏱️ Garantia:** 7 dias para troca
+` : tipo === 'duvida' ? `
+**❓ TIRE SUAS DÚVIDAS**
+> Pergunte o que quiser sobre:
+> - Produtos disponíveis
+> - Formas de pagamento
+> - Garantia e entrega
+> - Como funciona
+
+**💡 Dica:** Veja nosso painel de vendas em <#${CANAL_VENDAS_ID || 'vendas'}>
+` : tipo === 'parceria' ? `
+**🤝 PARCERIA LEVIATHAN**
+> Quer ganhar dinheiro revendendo?
+> - Comissão de até 30%
+> - Suporte exclusivo
+> - Material de divulgação
+
+**📈 Requisitos:**
+> Ter servidor Discord ou TikTok/YouTube
+> Ser ativo na comunidade Blox Fruits
+` : `
+**💸 REEMBOLSO / TROCA**
+> Informe:
+> - Qual conta comprou?
+> - Qual problema?
+> - Comprovante de pagamento
+> - Print do erro
+
+**📋 Regras:**
+> Garantia de 7 dias
+> Conta com problema comprovado = troca imediata
+`}
+
+**⚡ EQUIPE NOTIFICADA:** ${STAFF_ROLE_ID ? `<@&${STAFF_ROLE_ID}>` : '@Staff'} vai te atender em até 5 minutos!
+`
+    )
+    .setFooter({ text: `Leviathan Accounts • Ticket #${ticket.id.slice(-6)} • Atendimento Premium`, iconURL: interaction.user.displayAvatarURL() })
+    .setTimestamp();
+
+  const rowControle = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ticket_claim').setLabel('Reivindicar').setStyle(ButtonStyle.Primary).setEmoji('✋'),
+    new ButtonBuilder().setCustomId('ticket_close').setLabel('Fechar').setStyle(ButtonStyle.Danger).setEmoji('🔒'),
+    new ButtonBuilder().setCustomId('ticket_transcript').setLabel('Transcript').setStyle(ButtonStyle.Secondary).setEmoji('📋')
+  );
+  const rowControle2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('ticket_add_user').setLabel('Add Usuário').setStyle(ButtonStyle.Secondary).setEmoji('👤'),
+    new ButtonBuilder().setCustomId('ticket_notify').setLabel('Notificar Staff').setStyle(ButtonStyle.Secondary).setEmoji('🔔')
+  );
+
+  await ticket.send({ content: `${interaction.user} ${STAFF_ROLE_ID ? `<@&${STAFF_ROLE_ID}>` : ''}`, embeds: [embedWelcome], components: [rowControle, rowControle2] });
+
+  return interaction.followUp({ content: `✅ **Ticket criado com sucesso!**\n> Vá para ${ticket}\n> Tipo: **${config.label}**\n> Nossa equipe já foi notificada!`, ephemeral: true });
+}
+
+async function gerarTranscript(channel){
+  try{
+    const messages = await channel.messages.fetch({ limit: 100 });
+    const sorted = [...messages.values()].sort((a,b) => a.createdTimestamp - b.createdTimestamp);
+    
+    let html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Transcript - ${channel.name}</title><style>body{font-family:Arial;background:#0a0a0a;color:#fff;padding:20px} .msg{background:#171717;margin:10px 0;padding:12px;border-radius:8px;border-left:3px solid #FFD700} .author{color:#FFD700;font-weight:bold} .time{color:#888;font-size:12px} .content{margin-top:5px}</style></head><body><h1>📋 Transcript - ${channel.name}</h1><p>Canal: ${channel.name} | ID: ${channel.id} | Gerado em: ${new Date().toLocaleString('pt-BR')}</p>`;
+    
+    for(const msg of sorted){
+      if(msg.author.bot && msg.embeds.length>0) continue; // pula embeds do bot
+      html += `<div class="msg"><div class="author">${msg.author.tag} <span class="time">${new Date(msg.createdTimestamp).toLocaleString('pt-BR')}</span></div><div class="content">${msg.content || '<i>embed/anexo</i>'}</div></div>`;
+    }
+    
+    html += '</body></html>';
+    const filePath = `/tmp/transcript-${channel.id}.html`;
+    fs.writeFileSync(filePath, html);
+    return filePath;
+  }catch(e){
+    console.log('Erro transcript:', e.message);
+    return null;
+  }
+}
+
+
 client.on('interactionCreate', async interaction=>{
   try {
     if(interaction.isChatInputCommand()){
-      // Comando liberado para todos
+      // Comandos liberados para todos
       if(interaction.commandName==='meu-saldo'){
         await interaction.deferReply({ephemeral:true});
         const clientes = carregarClientes();
@@ -643,10 +854,46 @@ ${CARGOS_CLIENTE.slice().reverse().map(c=>`${dados.totalGasto >= c.minimo ? '✅
         return interaction.followUp({ embeds: [embed], ephemeral: true });
       }
 
-      // Comandos só staff
-      if(interaction.commandName!=='meu-saldo' && !isStaff(interaction)) return interaction.reply({ content: '❌ Sem permissão - Só staff pode usar este comando', ephemeral: true });
+      if(interaction.commandName==='fechar'){
+        if(!interaction.channel.name.includes('🎫') && !interaction.channel.name.includes('🛒')){
+          return interaction.reply({ content: '❌ Este comando só pode ser usado dentro de um ticket!', ephemeral: true });
+        }
+        await interaction.reply({ content: '🔒 Fechando ticket em 3 segundos...' });
+        setTimeout(()=>interaction.channel.delete().catch(()=>{}),3000);
+        return;
+      }
+
+      // Comandos só staff (exceto meu-saldo e fechar)
+      const comandosLivres = ['meu-saldo', 'fechar'];
+      if(!comandosLivres.includes(interaction.commandName) && !isStaff(interaction) && !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)){
+        // Permite staff por cargo OU por permissão de gerenciar servidor
+        const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+        if(!isAdmin){
+          return interaction.reply({ content: '❌ Sem permissão - Só staff pode usar este comando', ephemeral: true });
+        }
+      }
 
       if(interaction.commandName==='painel-vendas'){ await interaction.deferReply({ephemeral:true}); await enviarPainelVendas(interaction); return; }
+      
+      if(interaction.commandName==='setup-tickets' || interaction.commandName==='painel-tickets'){
+        await interaction.deferReply({ephemeral:true});
+        const canalOpt = interaction.options.getChannel('canal');
+        const categoriaOpt = interaction.options.getChannel('categoria');
+        const cargoOpt = interaction.options.getRole('cargo_staff');
+        
+        if(canalOpt) {
+          // Se especificou canal, envia lá
+          const painel = gerarPainelTicketsProfissional();
+          await canalOpt.send(painel);
+          return interaction.followUp({ content: `✅ **Painel de tickets profissional criado!**\n> Canal: ${canalOpt}\n> Estilo: Loja gringa premium\n> Botões: 5 tipos de ticket`, ephemeral: true });
+        } else {
+          // Envia no canal atual
+          const painel = gerarPainelTicketsProfissional();
+          await interaction.channel.send(painel);
+          return interaction.followUp({ content: `✅ **Painel de tickets criado aqui!**\n> ${interaction.channel}\n> Pronto para uso!`, ephemeral: true });
+        }
+      }
+
       if(interaction.commandName==='criar-combo'){
         await interaction.deferReply({ephemeral:true});
         const id = interaction.options.getString('id').toLowerCase().replace(/[^a-z0-9-]/g,'-');
@@ -769,7 +1016,297 @@ ${dados.compras.length>0 ? dados.compras.map(c=>`> ${c.produto} - R$ ${c.preco.t
          );
         return interaction.followUp({ embeds: [embed], ephemeral: true });
       }
+      if(interaction.commandName==='ticket-add'){
+        await interaction.deferReply({ephemeral:true});
+        if(!interaction.channel.name.includes('🎫') && !interaction.channel.name.includes('🛒')){
+          return interaction.followUp({ content: '❌ Só pode usar dentro de um ticket!', ephemeral: true });
+        }
+        const usuario = interaction.options.getUser('usuario');
+        await interaction.channel.permissionOverwrites.edit(usuario.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
+        return interaction.followUp({ content: `✅ ${usuario} adicionado ao ticket!`, ephemeral: false });
+      }
+      if(interaction.commandName==='ticket-remove'){
+        await interaction.deferReply({ephemeral:true});
+        if(!interaction.channel.name.includes('🎫') && !interaction.channel.name.includes('🛒')){
+          return interaction.followUp({ content: '❌ Só pode usar dentro de um ticket!', ephemeral: true });
+        }
+        const usuario = interaction.options.getUser('usuario');
+        await interaction.channel.permissionOverwrites.delete(usuario.id).catch(()=>{});
+        return interaction.followUp({ content: `✅ ${usuario} removido do ticket!`, ephemeral: false });
+      }
+      if(interaction.commandName==='ticket-transcript'){
+        await interaction.deferReply({ephemeral:true});
+        const filePath = await gerarTranscript(interaction.channel);
+        if(filePath){
+          const file = new AttachmentBuilder(filePath);
+          return interaction.followUp({ content: `📋 Transcript de ${interaction.channel.name}`, files: [file], ephemeral: false });
+        } else {
+          return interaction.followUp({ content: '❌ Erro ao gerar transcript', ephemeral: true });
+        }
+      }
+      if(interaction.commandName==='ver-avaliacoes'){
+        await interaction.deferReply({ephemeral:true});
+        const avaliacoes = carregarAvaliacoes();
+        if(avaliacoes.length===0){
+          return interaction.followUp({ content: '📭 Ainda não tem avaliações. Quando clientes avaliarem tickets, aparecerá aqui!', ephemeral: true });
+        }
+        const total = avaliacoes.length;
+        const media = (avaliacoes.reduce((a,b)=>a+b.estrelas,0) / total).toFixed(1);
+        const cinco = avaliacoes.filter(a=>a.estrelas===5).length;
+        const quatro = avaliacoes.filter(a=>a.estrelas===4).length;
+        const tres = avaliacoes.filter(a=>a.estrelas===3).length;
+        const dois = avaliacoes.filter(a=>a.estrelas===2).length;
+        const um = avaliacoes.filter(a=>a.estrelas===1).length;
+        
+        const ultimas = avaliacoes.slice(-5).reverse();
+        
+        const embed = new EmbedBuilder()
+          .setColor(0xFFD700)
+          .setAuthor({ name: 'LEVIATHAN ACCOUNTS • AVALIAÇÕES', iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
+          .setTitle(`⭐ ESTATÍSTICAS DE AVALIAÇÕES • ${total} avaliações`)
+          .setDescription(
+`**Média geral:** ${media} ⭐ (${total} avaliações)
+
+**📊 Distribuição:**
+> ⭐⭐⭐⭐⭐ 5 estrelas: ${cinco} (${((cinco/total)*100).toFixed(1)}%)
+> ⭐⭐⭐⭐ 4 estrelas: ${quatro} (${((quatro/total)*100).toFixed(1)}%)
+> ⭐⭐⭐ 3 estrelas: ${tres} (${((tres/total)*100).toFixed(1)}%)
+> ⭐⭐ 2 estrelas: ${dois} (${((dois/total)*100).toFixed(1)}%)
+> ⭐ 1 estrela: ${um} (${((um/total)*100).toFixed(1)}%)
+
+**📋 Últimas 5 avaliações:**
+${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag} - ${new Date(a.data).toLocaleDateString('pt-BR')} - ${a.ticket}`).join('\n') || '> Nenhuma'}
+
+**🏆 Status da loja:**
+> ${media >= 4.5 ? '🌟 EXCELENTE - Loja 5 estrelas!' : media >= 4.0 ? '⭐ MUITO BOA - Quase perfeita!' : media >= 3.0 ? '💛 BOA - Pode melhorar' : '⚠️ PRECISA MELHORAR'}
+`
+          )
+          .setFooter({ text: `Leviathan Accounts • Sistema de avaliações profissional`, iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
+          .setTimestamp();
+        
+        return interaction.followUp({ embeds: [embed], ephemeral: true });
+      }
     }
+
+    // ===== HANDLERS DE BOTÕES DE TICKETS PROFISSIONAIS =====
+    if(interaction.isButton()){
+      // Criação de tickets profissionais
+      if(interaction.customId.startsWith('ticket_create_')){
+        const tipo = interaction.customId.replace('ticket_create_', '');
+        return criarTicketProfissional(interaction, tipo);
+      }
+
+      // Controles dentro do ticket
+      if(interaction.customId==='ticket_close' || interaction.customId==='fechar_ticket'){
+        if(!interaction.channel.name.includes('🎫') && !interaction.channel.name.includes('🛒')){
+          return interaction.reply({ content: '❌ Só pode fechar dentro de um ticket!', ephemeral: true });
+        }
+        
+        // Sistema de avaliação profissional antes de fechar
+        const embedAvaliacao = new EmbedBuilder()
+          .setColor(0xFFD700)
+          .setAuthor({ name: 'LEVIATHAN ACCOUNTS • AVALIAÇÃO', iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
+          .setTitle('⭐ Avalie nosso atendimento!')
+          .setDescription(
+`### Obrigado por usar a Leviathan Accounts!
+
+> Seu ticket **${interaction.channel.name}** será fechado em breve.
+
+**📋 Como foi seu atendimento?**
+> Clique nas estrelas abaixo para avaliar
+> Sua opinião é muito importante para nós!
+
+**🎁 Ao avaliar, você:**
+> ✅ Ajuda a melhorar nosso atendimento
+> ✅ Ganha prioridade nos próximos tickets
+> ✅ Participa de sorteios mensais
+
+**⏱️ Este canal será deletado em 30 segundos após avaliar**
+> Se não avaliar, fechará automaticamente em 60 segundos
+`
+          )
+          .setFooter({ text: 'Leviathan Accounts • Sua avaliação nos ajuda a crescer', iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
+          .setTimestamp();
+
+        const rowEstrelas = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('avaliacao_5').setLabel('⭐⭐⭐⭐⭐').setStyle(ButtonStyle.Success).setEmoji('🌟'),
+          new ButtonBuilder().setCustomId('avaliacao_4').setLabel('⭐⭐⭐⭐').setStyle(ButtonStyle.Primary).setEmoji('⭐'),
+          new ButtonBuilder().setCustomId('avaliacao_3').setLabel('⭐⭐⭐').setStyle(ButtonStyle.Secondary).setEmoji('⭐'),
+          new ButtonBuilder().setCustomId('avaliacao_2').setLabel('⭐⭐').setStyle(ButtonStyle.Secondary).setEmoji('⭐'),
+          new ButtonBuilder().setCustomId('avaliacao_1').setLabel('⭐').setStyle(ButtonStyle.Danger).setEmoji('💔')
+        );
+        
+        const rowFechar = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('ticket_close_final').setLabel('Fechar sem avaliar').setStyle(ButtonStyle.Danger).setEmoji('🔒')
+        );
+
+        await interaction.reply({ embeds: [embedAvaliacao], components: [rowEstrelas, rowFechar] });
+        
+        // Auto-fecha em 60 segundos se não avaliar
+        setTimeout(()=>interaction.channel.delete().catch(()=>{}),60000);
+        return;
+      }
+
+      if(interaction.customId==='ticket_close_final'){
+        await interaction.reply({ content: '🔒 **Fechando ticket em 3 segundos...**\n> Obrigado por usar a Leviathan Accounts! Volte sempre 💎' });
+        setTimeout(()=>interaction.channel.delete().catch(()=>{}),3000);
+        return;
+      }
+
+      // Sistema de avaliação com estrelas
+      if(interaction.customId.startsWith('avaliacao_')){
+        const estrelas = parseInt(interaction.customId.replace('avaliacao_', ''));
+        const estrelasEmoji = '⭐'.repeat(estrelas) + '☆'.repeat(5-estrelas);
+        
+        // Salva avaliação
+        try {
+          const avaliacoes = carregarAvaliacoes();
+          // Tenta achar quem é o cliente (dono do ticket)
+          let clienteId = null;
+          let clienteTag = 'Desconhecido';
+          try {
+            const topic = interaction.channel.topic || '';
+            const match = topic.match(/(\d{17,19})/);
+            if(match) clienteId = match[1];
+            // Tenta pegar da permissão do canal
+            if(!clienteId){
+              const overwrites = interaction.channel.permissionOverwrites.cache;
+              for(const [id, ow] of overwrites){
+                if(id !== interaction.guild.roles.everyone.id && id !== STAFF_ROLE_ID && id !== interaction.client.user.id){
+                  clienteId = id;
+                  break;
+                }
+              }
+            }
+            if(clienteId){
+              const member = await interaction.guild.members.fetch(clienteId).catch(()=>null);
+              if(member) clienteTag = member.user.tag;
+            }
+          } catch {}
+          
+          const novaAvaliacao = {
+            id: Date.now().toString(),
+            estrelas,
+            ticket: interaction.channel.name,
+            ticketId: interaction.channel.id,
+            clienteId: clienteId || interaction.user.id,
+            clienteTag: clienteTag,
+            avaliadorId: interaction.user.id,
+            avaliadorTag: interaction.user.tag,
+            data: new Date().toISOString(),
+            tipo: interaction.channel.topic?.includes('compra') ? 'compra' : interaction.channel.topic?.includes('suporte') ? 'suporte' : 'geral'
+          };
+          
+          avaliacoes.push(novaAvaliacao);
+          salvarAvaliacoes(avaliacoes);
+          
+          // Calcula média
+          const media = avaliacoes.length > 0 ? (avaliacoes.reduce((a,b)=>a+b.estrelas,0) / avaliacoes.length).toFixed(1) : estrelas;
+          
+          // Embed de agradecimento
+          const embedObrigado = new EmbedBuilder()
+            .setColor(estrelas >= 4 ? 0x00FF7F : estrelas >= 3 ? 0xFFD700 : 0xFF4444)
+            .setTitle(estrelas === 5 ? '🌟 OBRIGADO PELA AVALIAÇÃO PERFEITA!' : estrelas >= 4 ? '⭐ Obrigado pela avaliação!' : '💛 Obrigado pelo feedback!')
+            .setDescription(
+`${estrelasEmoji} **${estrelas}/5 estrelas**
+
+> **Avaliação registrada com sucesso!**
+> Muito obrigado pelo seu feedback ${interaction.user}!
+
+**📊 Estatísticas da loja:**
+> Média atual: **${media} ⭐** (${avaliacoes.length} avaliações)
+> Sua avaliação: **${estrelasEmoji}**
+
+${estrelas === 5 ? `
+**🎉 VOCÊ É INCRÍVEL!**
+> Avaliação 5 estrelas nos ajuda MUITO!
+> Você ganhou prioridade nos próximos atendimentos
+> E participa do sorteio mensal de contas grátis!
+` : estrelas >= 3 ? `
+**💎 Obrigado!**
+> Vamos continuar melhorando para chegar no 5 estrelas!
+> Seu feedback é essencial!
+` : `
+**😢 Poxa, o que houve?**
+> Lamentamos que não foi 5 estrelas
+> Nossa equipe vai analisar o que melhorar
+> Se tiver problema pendente, fale com <@&${STAFF_ROLE_ID || 'staff'}>
+`}
+
+**🔒 Este ticket será fechado em 5 segundos...**
+`
+            )
+            .setFooter({ text: `Leviathan Accounts • Avaliação #${avaliacoes.length} • Obrigado!`, iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
+            .setTimestamp();
+          
+          // Envia no canal de avaliações se configurado
+          if(CANAL_AVALIACOES_ID){
+            try {
+              const canalAvaliacoes = await interaction.guild.channels.fetch(CANAL_AVALIACOES_ID).catch(()=>null);
+              if(canalAvaliacoes){
+                const embedLog = new EmbedBuilder()
+                  .setColor(estrelas >= 4 ? 0x00FF7F : 0xFFD700)
+                  .setAuthor({ name: `Nova Avaliação • ${estrelas} estrelas`, iconURL: interaction.user.displayAvatarURL() })
+                  .setDescription(
+`**Cliente:** ${interaction.user} (\`${clienteTag}\`)
+**Ticket:** \`${interaction.channel.name}\`
+**Nota:** ${estrelasEmoji} (${estrelas}/5)
+**Tipo:** ${novaAvaliacao.tipo}
+**Média da loja:** ${media} ⭐ (${avaliacoes.length} avaliações)
+**Data:** <t:${Math.floor(Date.now()/1000)}:F>
+
+> Avaliação feita por ${interaction.user.tag}
+`
+                  )
+                  .setFooter({ text: `Leviathan Accounts • Sistema de avaliações` })
+                  .setTimestamp();
+                
+                await canalAvaliacoes.send({ embeds: [embedLog] });
+              }
+            } catch(e){ console.log('Erro enviar log avaliação:', e.message); }
+          }
+          
+          await interaction.reply({ embeds: [embedObrigado] });
+          setTimeout(()=>interaction.channel.delete().catch(()=>{}),5000);
+          
+        } catch(e){
+          console.log('Erro avaliação:', e);
+          await interaction.reply({ content: `✅ Avaliação ${estrelasEmoji} registrada! Fechando em 3s...`, ephemeral: false });
+          setTimeout(()=>interaction.channel.delete().catch(()=>{}),3000);
+        }
+        return;
+      }
+
+      if(interaction.customId==='ticket_claim'){
+        if(!isStaff(interaction)) return interaction.reply({ content: '❌ Só staff pode reivindicar tickets!', ephemeral: true });
+        const embed = new EmbedBuilder()
+          .setColor(0x00FF7F)
+          .setDescription(`✋ Ticket reivindicado por ${interaction.user}!\n> Agora ${interaction.user} é o responsável por este atendimento.`);
+        await interaction.channel.send({ embeds: [embed] });
+        return interaction.reply({ content: `✅ Você reivindicou este ticket!`, ephemeral: true });
+      }
+
+      if(interaction.customId==='ticket_transcript'){
+        await interaction.deferReply({ ephemeral: true });
+        const filePath = await gerarTranscript(interaction.channel);
+        if(filePath){
+          const file = new AttachmentBuilder(filePath);
+          return interaction.followUp({ content: `📋 Transcript gerado!`, files: [file], ephemeral: true });
+        } else {
+          return interaction.followUp({ content: '❌ Erro ao gerar transcript', ephemeral: true });
+        }
+      }
+
+      if(interaction.customId==='ticket_add_user'){
+        return interaction.reply({ content: '👤 Use o comando `/ticket-add @usuario` para adicionar alguém ao ticket!', ephemeral: true });
+      }
+
+      if(interaction.customId==='ticket_notify'){
+        await interaction.reply({ content: `🔔 ${STAFF_ROLE_ID ? `<@&${STAFF_ROLE_ID}>` : '@Staff'} **foi notificado!**\n> Equipe chamada por ${interaction.user}`, ephemeral: false });
+        return;
+      }
+    }
+
 
     if(interaction.isStringSelectMenu() && interaction.customId==='selecionar_combo'){
       const comboId = interaction.values[0]; const estoque=carregar(); const combo=estoque.find(c=>c.id===comboId);
