@@ -1,0 +1,46 @@
+{
+  "cargos": [
+    {
+      "id": "notificacoes",
+      "nome": "🔔 Notificações",
+      "emoji": "🔔",
+      "descricao": "Receba todas as novidades da loja",
+      "cor": 16766720
+    },
+    {
+      "id": "promocoes",
+      "nome": "💰 Promoções",
+      "emoji": "💰",
+      "descricao": "Ofertas e descontos imperdíveis",
+      "cor": 65280
+    },
+    {
+      "id": "restock",
+      "nome": "📦 Restock",
+      "emoji": "📦",
+      "descricao": "Avisado quando tiver novas contas",
+      "cor": 39423
+    },
+    {
+      "id": "sorteios",
+      "nome": "🎉 Sorteios",
+      "emoji": "🎉",
+      "descricao": "Participe de sorteios exclusivos",
+      "cor": 16738740
+    },
+    {
+      "id": "atualizacoes",
+      "nome": "⚡ Atualizações",
+      "emoji": "⚡",
+      "descricao": "Novidades e mudanças na loja",
+      "cor": 16729344
+    },
+    {
+      "id": "parcerias",
+      "nome": "🤝 Parcerias",
+      "emoji": "🤝",
+      "descricao": "Seja avisado de novas parcerias",
+      "cor": 9662683
+    }
+  ]
+}
