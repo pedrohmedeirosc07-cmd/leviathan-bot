@@ -271,7 +271,18 @@ try {
   app.listen(process.env.PORT || 3000, () => console.log('🚀 Server ON + Admin SUPER FÁCIL em /admin'));
 } catch {}
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages] });
+const client = new Client({ 
+  intents: [
+    GatewayIntentBits.Guilds, 
+    GatewayIntentBits.GuildMembers, 
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildModeration,
+    GatewayIntentBits.GuildWebhooks,
+    GatewayIntentBits.GuildBans,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildEmojisAndStickers
+  ] 
+});
 
 // Anti-duplicação de carrinho - evita criar 2 tickets se clicar 2x rápido
 const comprasRecentes = new Map(); // userId -> timestamp
@@ -470,15 +481,420 @@ const commands = [
     new SlashCommandBuilder().setName('ticket-transcript').setDescription('📋 Gera transcript do ticket').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
     new SlashCommandBuilder().setName('fechar').setDescription('🔒 Fecha o ticket atual'),
     new SlashCommandBuilder().setName('ver-avaliacoes').setDescription('⭐ Ver estatísticas de avaliações').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    new SlashCommandBuilder().setName('antiraid').setDescription('🛡️ Configura proteção anti-nuke/raid').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+     .addStringOption(o => o.setName('acao').setDescription('Ação').setRequired(true).addChoices(
+       { name: 'Status', value: 'status' },
+       { name: 'Ativar', value: 'ativar' },
+       { name: 'Desativar', value: 'desativar' },
+       { name: 'Whitelist Add', value: 'whitelist_add' },
+       { name: 'Whitelist Remove', value: 'whitelist_remove' }
+     ))
+     .addUserOption(o => o.setName('usuario').setDescription('Usuário para whitelist').setRequired(false)),
+    new SlashCommandBuilder().setName('backup-servidor').setDescription('💾 Cria backup do servidor (canais e cargos)').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder().setName('automod').setDescription('🤖 Configura anti-palavrão, anti-link, anti-spam').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+     .addStringOption(o => o.setName('acao').setDescription('Ação').setRequired(true).addChoices(
+       { name: 'Status', value: 'status' },
+       { name: 'Ativar tudo', value: 'ativar' },
+       { name: 'Desativar tudo', value: 'desativar' },
+       { name: 'Ativar anti-palavrão', value: 'palavrao_on' },
+       { name: 'Desativar anti-palavrão', value: 'palavrao_off' },
+       { name: 'Ativar anti-link', value: 'link_on' },
+       { name: 'Desativar anti-link', value: 'link_off' },
+       { name: 'Ativar anti-invite', value: 'invite_on' },
+       { name: 'Desativar anti-invite', value: 'invite_off' },
+       { name: 'Ativar anti-spam', value: 'spam_on' },
+       { name: 'Desativar anti-spam', value: 'spam_off' },
+       { name: 'Ativar anti-caps', value: 'caps_on' },
+       { name: 'Desativar anti-caps', value: 'caps_off' }
+     )),
 ].map(c => c.toJSON());
+
+// ===== SISTEMA ANTI-ROUBO - SÓ FICA NO SEU SERVIDOR =====
+const GUILD_ID_ENV = process.env.GUILD_ID || '1430243817801519286';
+const ALLOWED_GUILDS = [
+  GUILD_ID_ENV,
+  '1430243817801519286', // seu servidor principal
+  process.env.GUILD_ID_2 || null,
+  process.env.GUILD_ID_3 || null
+].filter(Boolean);
+
+function isGuildAllowed(guildId){
+  return ALLOWED_GUILDS.includes(guildId);
+}
+
+// ===== SISTEMA ANTI-NUKE / ANTI-RAID - PROTEGE SERVIDOR DE DESTRUIÇÃO =====
+const OWNER_ID = process.env.OWNER_ID || null;
+const CANAL_LOGS_ID = process.env.CANAL_LOGS_ID || process.env.CANAL_AVALIACOES_ID || null;
+
+const WHITELIST_IDS = [
+  OWNER_ID,
+  process.env.BOT_OWNER_ID || null,
+  '1430243817801519286', // você pode colocar seu ID aqui
+].filter(Boolean);
+
+const antiNukeConfig = {
+  enabled: true,
+  maxChannelDelete: 2, // máximo de canais deletados em 10s
+  maxChannelCreate: 3,
+  maxRoleDelete: 2,
+  maxRoleCreate: 3,
+  maxBan: 2,
+  maxKick: 3,
+  maxWebhook: 2,
+  timeWindow: 10000, // 10 segundos
+  punish: 'ban', // ban, kick, removeRoles
+  logChannel: CANAL_LOGS_ID
+};
+
+const antiNukeCache = {
+  channelDelete: new Map(),
+  channelCreate: new Map(),
+  roleDelete: new Map(),
+  roleCreate: new Map(),
+  ban: new Map(),
+  kick: new Map(),
+  webhook: new Map(),
+  mention: new Map()
+};
+
+// ===== SISTEMA AUTOMOD - ANTI PALAVRÃO, ANTI LINK, ANTI SPAM =====
+const AUTOMOD_FILE = './automod.json';
+
+const automodDefault = {
+  enabled: true,
+  antiPalavrao: true,
+  antiLink: true,
+  antiInvite: true,
+  antiSpam: true,
+  antiCaps: true,
+  antiFlood: true,
+  antiEveryone: true,
+  muteTime: 5, // minutos
+  maxWarnings: 3, // após 3 avisos, muta
+  ignoreChannels: [], // IDs de canais ignorados
+  ignoreRoles: [] // IDs de cargos ignorados
+};
+
+function carregarAutomod(){
+  if(!fs.existsSync(AUTOMOD_FILE)) {
+    fs.writeFileSync(AUTOMOD_FILE, JSON.stringify(automodDefault, null, 2));
+    return automodDefault;
+  }
+  try { 
+    const data = JSON.parse(fs.readFileSync(AUTOMOD_FILE,'utf8'));
+    return { ...automodDefault, ...data };
+  } catch { return automodDefault; }
+}
+function salvarAutomod(d){ fs.writeFileSync(AUTOMOD_FILE, JSON.stringify(d,null,2)); }
+
+let automodConfig = carregarAutomod();
+
+// Lista de palavrões - pesada BR
+const PALAVROES = [
+  'arrombado','arrombada','buceta','bucetuda','caralho','caralha','cuzao','cuzão','cuzinho',
+  'fuder','fodase','foda-se','foda','fodendo','fodido','fodida','fdp','filho da puta','filha da puta',
+  'puta','puto','putaria','piranha','pica','pau no cu','vai se fuder','vsf','vai tomar no cu','vtmnc',
+  'porra','porra nenhuma','merda','bosta','bostao','cu','cuzão','desgraça','desgraçado','corno','corna',
+  'otario','otaria','otário','retardado','retardada','imbecil','idiota','burro','burra','viado','viadinho',
+  'sapatão','traveco','mongol','mongoloide','nazista','racista','preto','macaco' // adicione com cuidado
+];
+
+// Lista de palavras extras ofensivas - pode expandir
+const PALAVROES_EXTRAS = [
+  'kys','kill yourself','se mata','vai se matar','lixo','noob lixo','cancer','câncer'
+];
+
+const TODOS_PALAVROES = [...PALAVROES, ...PALAVROES_EXTRAS];
+
+const LINK_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+|discord\.gg\/[^\s]+|discord\.com\/invite\/[^\s]+|discordapp\.com\/invite\/[^\s]+)/gi;
+const INVITE_REGEX = /(discord\.gg\/[^\s]+|discord\.com\/invite\/[^\s]+|discordapp\.com\/invite\/[^\s]+)/gi;
+
+const spamCache = new Map(); // userId -> { messages: [{content, timestamp}], lastMessage, count }
+const warningsCache = new Map(); // userId -> { count, lastWarn }
+const capsCache = new Map();
+
+function containsPalavrao(text){
+  const lower = text.toLowerCase();
+  // Remove acentos e normaliza
+  const normalized = lower.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  for(const palavra of TODOS_PALAVROES){
+    // Verifica palavra exata ou com bordas
+    const regex = new RegExp(`\\b${palavra.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    if(regex.test(normalized) || normalized.includes(palavra)){
+      return palavra;
+    }
+  }
+  return null;
+}
+
+function isCapsAbuse(text){
+  if(text.length < 10) return false;
+  const letters = text.replace(/[^a-zA-Z]/g, '');
+  if(letters.length < 8) return false;
+  const upper = letters.replace(/[^A-Z]/g, '').length;
+  return (upper / letters.length) > 0.7; // 70% em maiúsculas
+}
+
+function checkSpam(userId, content){
+  const now = Date.now();
+  if(!spamCache.has(userId)){
+    spamCache.set(userId, { messages: [], lastContent: '', repeatCount: 0 });
+  }
+  const data = spamCache.get(userId);
+  
+  // Limpa mensagens antigas (5s)
+  data.messages = data.messages.filter(m => now - m.timestamp < 5000);
+  data.messages.push({ content, timestamp: now });
+  
+  // Flood - 5 mensagens em 5 segundos
+  if(data.messages.length >= 5) return { type: 'flood', count: data.messages.length };
+  
+  // Mensagem repetida
+  if(data.lastContent === content){
+    data.repeatCount++;
+    if(data.repeatCount >= 3) return { type: 'repeat', count: data.repeatCount };
+  } else {
+    data.repeatCount = 1;
+    data.lastContent = content;
+  }
+  
+  // Mensagens muito parecidas (mesmo texto em canais diferentes)
+  const sameMessages = data.messages.filter(m => m.content === content).length;
+  if(sameMessages >= 3) return { type: 'same', count: sameMessages };
+  
+  return null;
+}
+
+async function applyAutomodPunishment(member, reason, deleteMessage = null){
+  try{
+    if(isWhitelisted(member.id, member)) return false;
+    
+    // Ignora staff
+    if(STAFF_ROLE_ID && member.roles.cache.has(STAFF_ROLE_ID)) return false;
+    
+    // Sistema de warnings
+    const userId = member.id;
+    const now = Date.now();
+    
+    if(!warningsCache.has(userId)){
+      warningsCache.set(userId, { count: 0, lastWarn: 0, history: [] });
+    }
+    
+    const warnData = warningsCache.get(userId);
+    // Reseta warnings se passou 10 minutos
+    if(now - warnData.lastWarn > 600000){
+      warnData.count = 0;
+      warnData.history = [];
+    }
+    
+    warnData.count++;
+    warnData.lastWarn = now;
+    warnData.history.push({ reason, timestamp: now });
+    
+    // Deleta mensagem
+    if(deleteMessage){
+      try{ await deleteMessage.delete().catch(()=>{}); }catch{}
+    }
+    
+    // Se passou do limite, muta
+    if(warnData.count >= automodConfig.maxWarnings){
+      const muteTime = automodConfig.muteTime * 60 * 1000;
+      try{
+        await member.timeout(muteTime, `Automod: ${reason} - ${warnData.count} infrações`).catch(()=>{});
+        console.log(`🔇 Automod mutou ${member.user.tag} por ${automodConfig.muteTime}min - ${reason}`);
+        
+        // Reseta warnings após mutar
+        warnData.count = 0;
+        
+        // Avisa no canal
+        const embed = new EmbedBuilder()
+          .setColor(0xFF8C00)
+          .setTitle('🔇 Usuário silenciado pelo Automod')
+          .setDescription(
+`**Usuário:** ${member} (${member.user.tag})
+**Motivo:** ${reason}
+**Tempo:** ${automodConfig.muteTime} minutos
+**Avisos:** ${automodConfig.maxWarnings}/${automodConfig.maxWarnings}
+
+> Mensagens repetidas e spam não são permitidos
+> Leia as regras em <#${CATEGORIA_TICKET_ID ? 'regras' : 'regras'}>
+`
+          )
+          .setFooter({ text: 'Leviathan Accounts • Automod' })
+          .setTimestamp();
+        
+        if(deleteMessage?.channel){
+          await deleteMessage.channel.send({ embeds: [embed] }).then(m => setTimeout(()=>m.delete().catch(()=>{}), 10000)).catch(()=>{});
+        }
+        
+        return true;
+      }catch(e){
+        console.log(`Erro ao mutar ${member.user.tag}: ${e.message}`);
+      }
+    } else {
+      // Só avisa
+      const embed = new EmbedBuilder()
+        .setColor(0xFFD700)
+        .setDescription(`⚠️ ${member}, **${reason}**\n> Aviso ${warnData.count}/${automodConfig.maxWarnings} - Na próxima você será silenciado por ${automodConfig.muteTime}min`)
+        .setFooter({ text: 'Automod • Leviathan Accounts' });
+      
+      if(deleteMessage?.channel){
+        await deleteMessage.channel.send({ embeds: [embed] }).then(m => setTimeout(()=>m.delete().catch(()=>{}), 5000)).catch(()=>{});
+      }
+      
+      return false;
+    }
+    
+  }catch(e){
+    console.log('Erro automod punishment:', e.message);
+    return false;
+  }
+}
+
+function isWhitelisted(userId, memberOrGuild){
+  if(!userId) return false;
+  if(WHITELIST_IDS.includes(userId)) return true;
+  
+  let member = null;
+  let guild = null;
+  
+  // Se passou member
+  if(memberOrGuild && memberOrGuild.roles){
+    member = memberOrGuild;
+    guild = member.guild;
+  } else if(memberOrGuild && memberOrGuild.members){
+    // Se passou guild
+    guild = memberOrGuild;
+    try{
+      member = guild.members.cache.get(userId);
+    }catch{}
+  }
+  
+  if(member){
+    // Se tem cargo de staff, é whitelist - STAFF NÃO LEVA BAN NUNCA
+    if(STAFF_ROLE_ID && member.roles?.cache?.has(STAFF_ROLE_ID)) return true;
+    // Se é dono do servidor
+    if(member.guild?.ownerId === userId) return true;
+    // Se é o próprio bot
+    if(member.id === member.client.user.id) return true;
+  }
+  
+  // Se tem guild, tenta pegar membro do cache e verificar staff
+  if(guild && STAFF_ROLE_ID){
+    try{
+      const m = guild.members.cache.get(userId);
+      if(m && m.roles?.cache?.has(STAFF_ROLE_ID)) return true;
+      if(guild.ownerId === userId) return true;
+    }catch{}
+  }
+  
+  return false;
+}
+
+async function getAuditExecutor(guild, actionType){
+  try{
+    const logs = await guild.fetchAuditLogs({ type: actionType, limit: 1 });
+    const entry = logs.entries.first();
+    if(!entry) return null;
+    // Só pega se foi nos últimos 5 segundos
+    if(Date.now() - entry.createdTimestamp > 5000) return null;
+    return entry.executor;
+  }catch{ return null; }
+}
+
+async function punishUser(guild, userId, reason){
+  try{
+    if(isWhitelisted(userId)) {
+      console.log(`⚠️ Tentativa de punir whitelisted ignorada: ${userId}`);
+      return;
+    }
+    const member = await guild.members.fetch(userId).catch(()=>null);
+    if(!member) {
+      // Se já saiu, tenta banir direto
+      try{
+        await guild.members.ban(userId, { reason: `ANTI-NUKE: ${reason}` });
+        console.log(`🔨 ANTI-NUKE: Baniu ${userId} - ${reason}`);
+      }catch{}
+      return;
+    }
+    
+    // Verifica se o bot tem permissão maior que o alvo
+    if(member.roles.highest.position >= guild.members.me.roles.highest.position){
+      console.log(`❌ ANTI-NUKE: Não pode punir ${member.user.tag} - cargo maior que o bot`);
+      return;
+    }
+
+    if(antiNukeConfig.punish === 'ban'){
+      await member.ban({ reason: `ANTI-NUKE: ${reason}` }).catch(()=>{});
+      console.log(`🔨 ANTI-NUKE: Baniu ${member.user.tag} - ${reason}`);
+    } else if(antiNukeConfig.punish === 'kick'){
+      await member.kick(`ANTI-NUKE: ${reason}`).catch(()=>{});
+    } else {
+      // Remove todos os cargos perigosos
+      const rolesToRemove = member.roles.cache.filter(r => r.permissions.has(PermissionFlagsBits.Administrator) || r.permissions.has(PermissionFlagsBits.BanMembers) || r.permissions.has(PermissionFlagsBits.KickMembers) || r.permissions.has(PermissionFlagsBits.ManageChannels) || r.permissions.has(PermissionFlagsBits.ManageRoles) || r.permissions.has(PermissionFlagsBits.ManageGuild));
+      await member.roles.remove(rolesToRemove).catch(()=>{});
+    }
+  }catch(e){
+    console.log(`❌ Erro ao punir ${userId}: ${e.message}`);
+  }
+}
+
+async function logAntiNuke(guild, embed){
+  try{
+    if(CANAL_LOGS_ID){
+      const channel = await guild.channels.fetch(CANAL_LOGS_ID).catch(()=>null);
+      if(channel) await channel.send({ embeds: [embed] }).catch(()=>{});
+    }
+    // Também tenta logar no canal de vendas como fallback
+    if(CANAL_VENDAS_ID && CANAL_VENDAS_ID !== CANAL_LOGS_ID){
+      const channel2 = await guild.channels.fetch(CANAL_VENDAS_ID).catch(()=>null);
+      // Não spama no canal de vendas, só se for crítico
+    }
+  }catch{}
+}
+
+function checkRateLimit(map, userId, max){
+  const now = Date.now();
+  const key = userId;
+  if(!map.has(key)) map.set(key, []);
+  const timestamps = map.get(key).filter(t => now - t < antiNukeConfig.timeWindow);
+  timestamps.push(now);
+  map.set(key, timestamps);
+  return timestamps.length > max;
+}
+
+// Limpa cache a cada 30s
+setInterval(() => {
+  const now = Date.now();
+  for(const type of Object.keys(antiNukeCache)){
+    const map = antiNukeCache[type];
+    for(const [userId, timestamps] of map.entries()){
+      const filtered = timestamps.filter(t => now - t < antiNukeConfig.timeWindow);
+      if(filtered.length === 0) map.delete(userId);
+      else map.set(userId, filtered);
+    }
+  }
+}, 30000);
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
 
 client.once('ready', async () => {
     console.log(`✅ LEVIATHAN PROFISSIONAL LOGADO COMO ${client.user.tag}`);
+    console.log(`🔒 PROTEÇÃO ANTI-ROUBO ATIVA - Servidores permitidos: ${ALLOWED_GUILDS.join(', ')}`);
     console.log(`📊 Bot está em ${client.guilds.cache.size} servidor(es): ${[...client.guilds.cache.values()].map(g=>`${g.name} (${g.id})`).join(', ')}`);
     
+    // Verifica todos os servidores e sai dos não autorizados
     for (const g of client.guilds.cache.values()) {
+        if(!isGuildAllowed(g.id)){
+          console.log(`🚨 SERVIDOR NÃO AUTORIZADO DETECTADO: ${g.name} (${g.id}) - SAINDO...`);
+          try{
+            await g.leave();
+            console.log(`✅ Saiu do servidor não autorizado: ${g.name}`);
+          }catch(e){
+            console.log(`❌ Erro ao sair de ${g.name}: ${e.message}`);
+          }
+          continue;
+        }
         try {
           await rest.put(Routes.applicationGuildCommands(client.user.id, g.id), { body: commands });
           console.log(`✅ Comandos registrados em: ${g.name}`);
@@ -486,18 +902,436 @@ client.once('ready', async () => {
           console.log(`❌ Erro ao registrar comandos em ${g.name}: ${e.message}`);
         }
     }
-    console.log('✅ BOT ONLINE - SEM PROTEÇÃO DE SAÍDA (pode usar em qualquer servidor)');
+    console.log(`🔒 PROTEÇÃO ATIVA - Bot protegido contra roubo! Só funciona em ${ALLOWED_GUILDS.length} servidor(es) autorizado(s)`);
 });
 
 client.on('guildCreate', async (guild) => {
   console.log(`🎉 Bot adicionado em novo servidor: ${guild.name} (${guild.id})`);
+  
+  // PROTEÇÃO ANTI-ROUBO - Se não for seu servidor, sai imediatamente
+  if(!isGuildAllowed(guild.id)){
+    console.log(`🚨 TENTATIVA DE ROUBO! Bot adicionado em servidor não autorizado: ${guild.name} (${guild.id})`);
+    console.log(`🚨 SAINDO IMEDIATAMENTE...`);
+    try{
+      // Tenta avisar no primeiro canal que achar
+      const channel = guild.channels.cache.find(c => c.type === ChannelType.GuildText && c.permissionsFor(guild.members.me)?.has(PermissionFlagsBits.SendMessages));
+      if(channel){
+        await channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xFF0000)
+              .setTitle('🚨 BOT PROTEGIDO - ACESSO NEGADO')
+              .setDescription(
+`### Este bot é privado e protegido contra roubo!
+
+> **Este bot pertence à Leviathan Accounts**
+> **Só funciona no servidor oficial**
+
+**🔒 Sistema anti-roubo ativado**
+> Este servidor não está na lista autorizada
+> O bot irá sair automaticamente
+
+**💎 Quer um bot igual?**
+> Entre em contato com o dono para adquirir
+> Bot profissional com sistema de tickets + vendas
+
+**Servidor oficial:** https://discord.gg/leviathan
+`
+              )
+              .setFooter({ text: 'Leviathan Accounts • Sistema Anti-Roubo' })
+          ]
+        }).catch(()=>{});
+      }
+    }catch{}
+    
+    // Espera 2 segundos e sai
+    setTimeout(async () => {
+      try{
+        await guild.leave();
+        console.log(`✅ Saiu do servidor não autorizado: ${guild.name} (${guild.id})`);
+      }catch(e){
+        console.log(`❌ Erro ao sair de ${guild.name}: ${e.message}`);
+      }
+    }, 2000);
+    return;
+  }
+
+  // Se for autorizado, registra comandos
   try{
     await rest.put(Routes.applicationGuildCommands(client.user.id, guild.id), { body: commands });
-    console.log(`✅ Comandos registrados no novo servidor: ${guild.name}`);
+    console.log(`✅ Comandos registrados no novo servidor autorizado: ${guild.name}`);
   }catch(e){
     console.log(`❌ Erro ao registrar no novo servidor: ${e.message}`);
   }
 });
+
+// ===== SISTEMA ANTI-NUKE COMPLETO - PROTEGE SERVIDOR DE DESTRUIÇÃO =====
+console.log('🛡️ Inicializando sistema anti-nuke...');
+
+// Anti Channel Delete
+client.on('channelDelete', async (channel) => {
+  if(!antiNukeConfig.enabled) return;
+  if(!channel.guild) return;
+  if(!isGuildAllowed(channel.guild.id)) return;
+  
+  try{
+    const executor = await getAuditExecutor(channel.guild, 12); // ChannelDelete = 12
+    if(!executor) return;
+    if(isWhitelisted(executor.id, channel?.guild || role?.guild || ban?.guild || member?.guild || guild || null)) return;
+    
+    // Ignora tickets sendo fechados pelo bot
+    if(channel.name.includes('ticket') || channel.name.includes('🎫') || channel.name.includes('🛒')) {
+      console.log(`ℹ️ Ticket fechado: ${channel.name} por ${executor.tag} - ignorando anti-nuke`);
+      return;
+    }
+    
+    if(checkRateLimit(antiNukeCache.channelDelete, executor.id, antiNukeConfig.maxChannelDelete)){
+      console.log(`🚨 ANTI-NUKE: ${executor.tag} deletou muitos canais!`);
+      
+      const embed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('🚨 ANTI-NUKE ATIVADO - Tentativa de destruição detectada!')
+        .setDescription(
+`**Ação:** Deletou canais em massa
+**Usuário:** ${executor} (${executor.tag} - \`${executor.id}\`)
+**Canal deletado:** #${channel.name}
+**Limite:** ${antiNukeConfig.maxChannelDelete} canais em ${antiNukeConfig.timeWindow/1000}s
+
+**🛡️ Ação tomada:** Usuário banido automaticamente
+**⏰ Horário:** <t:${Math.floor(Date.now()/1000)}:F>
+`
+        )
+        .setFooter({ text: 'Leviathan Accounts • Sistema Anti-Nuke' })
+        .setTimestamp();
+      
+      await punishUser(channel.guild, executor.id, `Deletou canais em massa (${channel.name})`);
+      await logAntiNuke(channel.guild, embed);
+    }
+  }catch(e){ console.log('Erro anti-nuke channelDelete:', e.message); }
+});
+
+// Anti Channel Create (raid de canais)
+client.on('channelCreate', async (channel) => {
+  if(!antiNukeConfig.enabled) return;
+  if(!channel.guild) return;
+  if(!isGuildAllowed(channel.guild.id)) return;
+  
+  try{
+    const executor = await getAuditExecutor(channel.guild, 10); // ChannelCreate = 10
+    if(!executor) return;
+    if(isWhitelisted(executor.id, channel?.guild || role?.guild || ban?.guild || member?.guild || guild || null)) return;
+    
+    if(checkRateLimit(antiNukeCache.channelCreate, executor.id, antiNukeConfig.maxChannelCreate)){
+      console.log(`🚨 ANTI-NUKE: ${executor.tag} criou muitos canais!`);
+      
+      const embed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('🚨 ANTI-NUKE - Spam de canais detectado!')
+        .setDescription(
+`**Ação:** Criou canais em massa (possível raid)
+**Usuário:** ${executor} (${executor.tag})
+**Canal criado:** #${channel.name}
+
+**🛡️ Ação:** Banido automaticamente
+`
+        )
+        .setTimestamp();
+      
+      await punishUser(channel.guild, executor.id, `Criou canais em massa`);
+      await logAntiNuke(channel.guild, embed);
+      
+      // Deleta os canais criados pelo raider
+      try{
+        const channels = channel.guild.channels.cache.filter(c => c.createdTimestamp > Date.now() - 10000);
+        for(const [id, ch] of channels){
+          if(ch.deletable) await ch.delete().catch(()=>{});
+        }
+      }catch{}
+    }
+  }catch(e){ console.log('Erro anti-nuke channelCreate:', e.message); }
+});
+
+// Anti Role Delete
+client.on('roleDelete', async (role) => {
+  if(!antiNukeConfig.enabled) return;
+  if(!isGuildAllowed(role.guild.id)) return;
+  
+  try{
+    const executor = await getAuditExecutor(role.guild, 32); // RoleDelete = 32
+    if(!executor) return;
+    if(isWhitelisted(executor.id, channel?.guild || role?.guild || ban?.guild || member?.guild || guild || null)) return;
+    
+    if(checkRateLimit(antiNukeCache.roleDelete, executor.id, antiNukeConfig.maxRoleDelete)){
+      console.log(`🚨 ANTI-NUKE: ${executor.tag} deletou muitos cargos!`);
+      
+      const embed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('🚨 ANTI-NUKE - Deleção de cargos em massa!')
+        .setDescription(`**Usuário:** ${executor} (${executor.tag})\n**Cargo:** ${role.name}\n**Ação:** Banido`)
+        .setTimestamp();
+      
+      await punishUser(role.guild, executor.id, `Deletou cargos em massa`);
+      await logAntiNuke(role.guild, embed);
+    }
+  }catch(e){ console.log('Erro roleDelete:', e.message); }
+});
+
+// Anti Role Create
+client.on('roleCreate', async (role) => {
+  if(!antiNukeConfig.enabled) return;
+  if(!isGuildAllowed(role.guild.id)) return;
+  
+  try{
+    const executor = await getAuditExecutor(role.guild, 30); // RoleCreate = 30
+    if(!executor) return;
+    if(isWhitelisted(executor.id, channel?.guild || role?.guild || ban?.guild || member?.guild || guild || null)) return;
+    
+    // Se criou cargo com ADM, já bane na hora
+    if(role.permissions.has(PermissionFlagsBits.Administrator)){
+      console.log(`🚨 ANTI-NUKE: ${executor.tag} criou cargo com ADM: ${role.name}`);
+      const embed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('🚨 ANTI-NUKE - Cargo com ADM criado!')
+        .setDescription(`**Usuário:** ${executor}\n**Cargo:** ${role.name} com ADMINISTRATOR\n**Ação:** Banido imediatamente`)
+        .setTimestamp();
+      
+      await punishUser(role.guild, executor.id, `Criou cargo com ADM: ${role.name}`);
+      await role.delete().catch(()=>{});
+      await logAntiNuke(role.guild, embed);
+      return;
+    }
+    
+    if(checkRateLimit(antiNukeCache.roleCreate, executor.id, antiNukeConfig.maxRoleCreate)){
+      const embed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('🚨 ANTI-NUKE - Spam de cargos!')
+        .setDescription(`**Usuário:** ${executor} criando muitos cargos\n**Ação:** Banido`)
+        .setTimestamp();
+      
+      await punishUser(role.guild, executor.id, `Criou cargos em massa`);
+      await logAntiNuke(role.guild, embed);
+    }
+  }catch(e){ console.log('Erro roleCreate:', e.message); }
+});
+
+// Anti Ban
+client.on('guildBanAdd', async (ban) => {
+  if(!antiNukeConfig.enabled) return;
+  if(!isGuildAllowed(ban.guild.id)) return;
+  
+  try{
+    const executor = await getAuditExecutor(ban.guild, 22); // MemberBanAdd = 22
+    if(!executor) return;
+    if(isWhitelisted(executor.id, channel?.guild || role?.guild || ban?.guild || member?.guild || guild || null)) return;
+    
+    if(checkRateLimit(antiNukeCache.ban, executor.id, antiNukeConfig.maxBan)){
+      console.log(`🚨 ANTI-NUKE: ${executor.tag} baniu muitas pessoas!`);
+      
+      const embed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('🚨 ANTI-NUKE - Ban em massa detectado!')
+        .setDescription(
+`**Usuário:** ${executor} (${executor.tag})
+**Ação:** Baniu ${antiNukeCache.ban.get(executor.id)?.length || 'muitas'} pessoas
+**Último ban:** ${ban.user.tag}
+
+**🛡️ Ação:** Banido e todos os bans desfeitos
+`
+        )
+        .setTimestamp();
+      
+      await punishUser(ban.guild, executor.id, `Ban em massa`);
+      await logAntiNuke(ban.guild, embed);
+      
+      // Tenta desbanir todos que ele baniu recentemente
+      try{
+        const bans = await ban.guild.bans.fetch();
+        const recentBans = bans.filter(b => b.user.id !== executor.id);
+        for(const [id, b] of recentBans){
+          // Só desbane se foi banido nos últimos 30s (evita desbanir bans antigos legítimos)
+          await ban.guild.members.unban(id, 'Anti-nuke: desfazendo bans em massa').catch(()=>{});
+        }
+      }catch{}
+    }
+  }catch(e){ console.log('Erro guildBanAdd:', e.message); }
+});
+
+// Anti Kick / Member Remove
+client.on('guildMemberRemove', async (member) => {
+  if(!antiNukeConfig.enabled) return;
+  if(!isGuildAllowed(member.guild.id)) return;
+  
+  try{
+    // Tenta descobrir se foi kick
+    const executor = await getAuditExecutor(member.guild, 20); // MemberKick = 20
+    if(!executor) return;
+    if(isWhitelisted(executor.id, channel?.guild || role?.guild || ban?.guild || member?.guild || guild || null)) return;
+    
+    if(checkRateLimit(antiNukeCache.kick, executor.id, antiNukeConfig.maxKick)){
+      console.log(`🚨 ANTI-NUKE: ${executor.tag} kickou muita gente!`);
+      
+      const embed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('🚨 ANTI-NUKE - Kick em massa!')
+        .setDescription(`**Usuário:** ${executor} kickou muitas pessoas\n**Último:** ${member.user.tag}\n**Ação:** Banido`)
+        .setTimestamp();
+      
+      await punishUser(member.guild, executor.id, `Kick em massa`);
+      await logAntiNuke(member.guild, embed);
+    }
+  }catch(e){ console.log('Erro memberRemove:', e.message); }
+});
+
+// Anti Webhook
+client.on('webhookUpdate', async (channel) => {
+  if(!antiNukeConfig.enabled) return;
+  if(!isGuildAllowed(channel.guild.id)) return;
+  
+  try{
+    const executor = await getAuditExecutor(channel.guild, 50); // WebhookCreate = 50, 51 update, 52 delete - usamos 50 como base
+    if(!executor) return;
+    if(isWhitelisted(executor.id, channel?.guild || role?.guild || ban?.guild || member?.guild || guild || null)) return;
+    
+    if(checkRateLimit(antiNukeCache.webhook, executor.id, antiNukeConfig.maxWebhook)){
+      console.log(`🚨 ANTI-NUKE: ${executor.tag} criou muitos webhooks!`);
+      
+      const embed = new EmbedBuilder()
+        .setColor(0xFF0000)
+        .setTitle('🚨 ANTI-NUKE - Webhook spam!')
+        .setDescription(`**Usuário:** ${executor} criando webhooks em massa\n**Canal:** #${channel.name}\n**Ação:** Banido + webhooks deletados`)
+        .setTimestamp();
+      
+      await punishUser(channel.guild, executor.id, `Webhook spam`);
+      
+      // Deleta todos webhooks do canal
+      try{
+        const webhooks = await channel.fetchWebhooks();
+        for(const [id, wh] of webhooks){
+          await wh.delete().catch(()=>{});
+        }
+      }catch{}
+      
+      await logAntiNuke(channel.guild, embed);
+    }
+  }catch(e){ console.log('Erro webhookUpdate:', e.message); }
+});
+
+// ===== ANTI @everyone + AUTOMOD (PALAVRÃO, LINK, SPAM, CAPS) =====
+client.on('messageCreate', async (message) => {
+  if(!message.guild) return;
+  if(!isGuildAllowed(message.guild.id)) return;
+  if(message.author.bot) return;
+  if(!message.content) return;
+  if(message.member && isWhitelisted(message.author.id, message.member)) return; // Staff whitelist - NÃO PUNE STAFF
+  
+  // === ANTI-NUKE @everyone ===
+  if(antiNukeConfig.enabled && message.mentions.everyone){
+    try{
+      if(checkRateLimit(antiNukeCache.mention, message.author.id, 2)){
+        console.log(`🚨 ANTI-NUKE: ${message.author.tag} spam de @everyone`);
+        await message.delete().catch(()=>{});
+        const embed = new EmbedBuilder()
+          .setColor(0xFF0000)
+          .setTitle('🚨 ANTI-NUKE - Spam @everyone!')
+          .setDescription(`**Usuário:** ${message.author} spamou @everyone/@here\n**Canal:** ${message.channel}\n**Ação:** Mensagem deletada + cargos removidos`)
+          .setTimestamp();
+        try{
+          const member = message.member;
+          if(member && member.roles.highest.position < message.guild.members.me.roles.highest.position){
+            const rolesToRemove = member.roles.cache.filter(r => r.permissions.has(PermissionFlagsBits.MentionEveryone) || r.permissions.has(PermissionFlagsBits.Administrator));
+            await member.roles.remove(rolesToRemove).catch(()=>{});
+          }
+        }catch{}
+        await logAntiNuke(message.guild, embed);
+        return;
+      }
+    }catch(e){ console.log('Erro mention:', e.message); }
+  }
+  
+  // Anti link de webhook / token
+  if(message.content.includes('discord.com/api/webhooks') || message.content.includes('https://discord.com/api/webhooks')){
+    await message.delete().catch(()=>{});
+    console.log(`🛡️ Webhook link deletado de ${message.author.tag}`);
+    return;
+  }
+
+  // ===== AUTOMOD - SÓ RODA SE ATIVADO =====
+  if(!automodConfig.enabled) return;
+  
+  // Ignora canais configurados
+  if(automodConfig.ignoreChannels.includes(message.channel.id)) return;
+  // Ignora cargos configurados
+  if(message.member && message.member.roles.cache.some(r => automodConfig.ignoreRoles.includes(r.id))) return;
+  // Ignora tickets (não modera dentro de ticket)
+  if(isTicketChannel(message.channel)) return;
+
+  const content = message.content;
+
+  // 1. ANTI PALAVRÃO
+  if(automodConfig.antiPalavrao){
+    const palavrãoEncontrado = containsPalavrao(content);
+    if(palavrãoEncontrado){
+      console.log(`🤬 Automod palavrão: ${message.author.tag} disse "${palavrãoEncontrado}"`);
+      await applyAutomodPunishment(message.member, `Palavrão detectado: \`${palavrãoEncontrado}\``, message);
+      return;
+    }
+  }
+
+  // 2. ANTI INVITE (discord.gg)
+  if(automodConfig.antiInvite){
+    if(INVITE_REGEX.test(content)){
+      console.log(`🔗 Automod invite: ${message.author.tag} mandou invite`);
+      await applyAutomodPunishment(message.member, `Link de convite Discord não permitido`, message);
+      return;
+    }
+  }
+
+  // 3. ANTI LINK (qualquer link)
+  if(automodConfig.antiLink){
+    // Permite links do imgur, youtube, etc? Por enquanto bloqueia tudo exceto se for staff
+    // Você pode adicionar whitelist de domínios aqui
+    const allowedDomains = ['imgur.com', 'i.imgur.com', 'youtube.com', 'youtu.be', 'tenor.com', 'giphy.com'];
+    const hasLink = LINK_REGEX.test(content);
+    if(hasLink){
+      // Verifica se é link permitido
+      const isAllowed = allowedDomains.some(d => content.toLowerCase().includes(d));
+      if(!isAllowed){
+        console.log(`🔗 Automod link: ${message.author.tag} mandou link`);
+        await applyAutomodPunishment(message.member, `Links não são permitidos aqui`, message);
+        return;
+      }
+    }
+  }
+
+  // 4. ANTI CAPS
+  if(automodConfig.antiCaps){
+    if(isCapsAbuse(content)){
+      console.log(`🔠 Automod caps: ${message.author.tag}`);
+      await applyAutomodPunishment(message.member, `Uso excessivo de CAPS LOCK`, message);
+      return;
+    }
+  }
+
+  // 5. ANTI SPAM / FLOOD
+  if(automodConfig.antiSpam || automodConfig.antiFlood){
+    const spamResult = checkSpam(message.author.id, content);
+    if(spamResult){
+      if(spamResult.type === 'flood'){
+        console.log(`💬 Automod flood: ${message.author.tag} - ${spamResult.count} msgs em 5s`);
+        await applyAutomodPunishment(message.member, `Flood - ${spamResult.count} mensagens em 5 segundos`, message);
+        return;
+      }
+      if(spamResult.type === 'repeat' || spamResult.type === 'same'){
+        console.log(`🔁 Automod repeat: ${message.author.tag} - repetindo mensagem`);
+        await applyAutomodPunishment(message.member, `Spam - Mensagem repetida ${spamResult.count}x`, message);
+        return;
+      }
+    }
+  }
+});
+
+console.log('🛡️ Sistema anti-nuke + Automod carregado com sucesso!');
+
 
 async function gerarPainelUnico(){
   const estoque = carregar();
@@ -851,6 +1685,19 @@ async function gerarTranscript(channel){
 
 client.on('interactionCreate', async interaction=>{
   try {
+    // ===== PROTEÇÃO ANTI-ROUBO - BLOQUEIA USO FORA DO SERVIDOR AUTORIZADO =====
+    if(interaction.guild && !isGuildAllowed(interaction.guild.id)){
+      console.log(`🚨 Tentativa de uso em servidor não autorizado: ${interaction.guild.name} (${interaction.guild.id}) por ${interaction.user.tag}`);
+      try{
+        await interaction.reply({ content: '🚨 **BOT PROTEGIDO - ACESSO NEGADO**\n> Este bot pertence à Leviathan Accounts e só funciona no servidor oficial.\n> O bot irá sair deste servidor.', ephemeral: true });
+      }catch{}
+      // Sai do servidor após 3 segundos
+      setTimeout(async () => {
+        try{ await interaction.guild.leave(); }catch{}
+      }, 3000);
+      return;
+    }
+
     if(interaction.isChatInputCommand()){
       // Comandos liberados para todos
       if(interaction.commandName==='meu-saldo'){
@@ -1111,6 +1958,225 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
           .setTimestamp();
         
         return interaction.followUp({ embeds: [embed], ephemeral: true });
+      }
+      if(interaction.commandName==='antiraid'){
+        await interaction.deferReply({ephemeral:true});
+        const acao = interaction.options.getString('acao');
+        const usuario = interaction.options.getUser('usuario');
+        
+        if(acao==='status'){
+          const embed = new EmbedBuilder()
+            .setColor(antiNukeConfig.enabled ? 0x00FF7F : 0xFF4444)
+            .setTitle(`🛡️ ANTI-NUKE - ${antiNukeConfig.enabled ? 'ATIVADO ✅' : 'DESATIVADO ❌'}`)
+            .setDescription(
+`**Status:** ${antiNukeConfig.enabled ? '🟢 Protegendo servidor' : '🔴 Desativado'}
+**Punição:** ${antiNukeConfig.punish === 'ban' ? '🔨 Banir' : '👢 Kickar'}
+
+**📊 Limites configurados (em ${antiNukeConfig.timeWindow/1000}s):**
+> 📺 Canais deletados: ${antiNukeConfig.maxChannelDelete}
+> 📺 Canais criados: ${antiNukeConfig.maxChannelCreate}
+> 👑 Cargos deletados: ${antiNukeConfig.maxRoleDelete}
+> 👑 Cargos criados: ${antiNukeConfig.maxRoleCreate}
+> 🔨 Bans: ${antiNukeConfig.maxBan}
+> 👢 Kicks: ${antiNukeConfig.maxKick}
+> 🔗 Webhooks: ${antiNukeConfig.maxWebhook}
+
+**👤 Whitelist:**
+> ${WHITELIST_IDS.map(id=>`<@${id}>`).join(', ') || 'Nenhum'}
+> + Dono do servidor
+> + Cargo Staff (<@&${STAFF_ROLE_ID}>)
+> + Bot
+
+**📋 O que protege:**
+> ✅ Deletar canais em massa
+> ✅ Criar canais spam (raid)
+> ✅ Deletar cargos em massa
+> ✅ Criar cargo com ADM
+> ✅ Ban em massa
+> ✅ Kick em massa
+> ✅ Webhook spam
+> ✅ @everyone spam
+> ✅ Link de webhook vazado
+
+**💾 Backup:** Use /backup-servidor para salvar canais e cargos
+`
+            )
+            .setFooter({ text: 'Leviathan Accounts • Sistema Anti-Nuke Profissional' })
+            .setTimestamp();
+          return interaction.followUp({ embeds: [embed], ephemeral: true });
+        }
+        
+        if(acao==='ativar'){
+          antiNukeConfig.enabled = true;
+          return interaction.followUp({ content: '✅ **Anti-nuke ATIVADO!**\n> Seu servidor agora está protegido contra destruição!', ephemeral: true });
+        }
+        
+        if(acao==='desativar'){
+          antiNukeConfig.enabled = false;
+          return interaction.followUp({ content: '⚠️ **Anti-nuke DESATIVADO!**\n> Servidor vulnerável! Ative de novo com /antiraid ativar', ephemeral: true });
+        }
+        
+        if(acao==='whitelist_add'){
+          if(!usuario) return interaction.followUp({ content: '❌ Mencione um usuário para adicionar na whitelist!', ephemeral: true });
+          if(WHITELIST_IDS.includes(usuario.id)){
+            return interaction.followUp({ content: `⚠️ ${usuario} já está na whitelist!`, ephemeral: true });
+          }
+          WHITELIST_IDS.push(usuario.id);
+          return interaction.followUp({ content: `✅ ${usuario} adicionado na whitelist anti-nuke!\n> Ele não será punido pelo sistema`, ephemeral: true });
+        }
+        
+        if(acao==='whitelist_remove'){
+          if(!usuario) return interaction.followUp({ content: '❌ Mencione um usuário para remover da whitelist!', ephemeral: true });
+          const idx = WHITELIST_IDS.indexOf(usuario.id);
+          if(idx===-1) return interaction.followUp({ content: `⚠️ ${usuario} não está na whitelist!`, ephemeral: true });
+          WHITELIST_IDS.splice(idx, 1);
+          return interaction.followUp({ content: `✅ ${usuario} removido da whitelist!`, ephemeral: true });
+        }
+      }
+      if(interaction.commandName==='automod'){
+        await interaction.deferReply({ephemeral:true});
+        const acao = interaction.options.getString('acao');
+        
+        if(acao==='status'){
+          const cfg = automodConfig;
+          const embed = new EmbedBuilder()
+            .setColor(cfg.enabled ? 0x00FF7F : 0xFF4444)
+            .setTitle(`🤖 AUTOMOD - ${cfg.enabled ? 'ATIVADO ✅' : 'DESATIVADO ❌'}`)
+            .setDescription(
+`**Status geral:** ${cfg.enabled ? '🟢 Ativo' : '🔴 Desativado'}
+**Punição:** Mute de ${cfg.muteTime} min após ${cfg.maxWarnings} avisos
+
+**📋 Filtros:**
+> 🤬 Anti-palavrão: ${cfg.antiPalavrao ? '🟢 ON' : '🔴 OFF'}
+> 🔗 Anti-link: ${cfg.antiLink ? '🟢 ON' : '🔴 OFF'}
+> 📨 Anti-invite (discord.gg): ${cfg.antiInvite ? '🟢 ON' : '🔴 OFF'}
+> 💬 Anti-spam: ${cfg.antiSpam ? '🟢 ON' : '🔴 OFF'}
+> 🔠 Anti-caps: ${cfg.antiCaps ? '🟢 ON' : '🔴 OFF'}
+> 🔁 Anti-flood (5 msgs/5s): ${cfg.antiFlood ? '🟢 ON' : '🔴 OFF'}
+> 📢 Anti-@everyone: ${cfg.antiEveryone ? '🟢 ON' : '🔴 OFF'}
+
+**👤 Quem é ignorado:**
+> ✅ Staff (<@&${STAFF_ROLE_ID}>)
+> ✅ Dono do servidor
+> ✅ Whitelist anti-nuke
+> ✅ Tickets (não modera dentro)
+
+**🔧 Comandos:**
+> /automod ativar - Ativa tudo
+> /automod desativar - Desativa tudo
+> /automod palavrão_on/off - Liga/desliga palavrão
+> /automod link_on/off - Liga/desliga link
+
+**📝 Palavrões detectados:** ${TODOS_PALAVROES.length} palavras
+`
+            )
+            .setFooter({ text: 'Leviathan Accounts • Automod Profissional' })
+            .setTimestamp();
+          return interaction.followUp({ embeds: [embed], ephemeral: true });
+        }
+        
+        if(acao==='ativar'){
+          automodConfig.enabled = true;
+          automodConfig.antiPalavrao = true;
+          automodConfig.antiLink = true;
+          automodConfig.antiInvite = true;
+          automodConfig.antiSpam = true;
+          automodConfig.antiCaps = true;
+          automodConfig.antiFlood = true;
+          salvarAutomod(automodConfig);
+          return interaction.followUp({ content: '✅ **Automod ATIVADO!**\n> Anti-palavrão, anti-link, anti-spam, anti-caps tudo ligado!', ephemeral: true });
+        }
+        
+        if(acao==='desativar'){
+          automodConfig.enabled = false;
+          salvarAutomod(automodConfig);
+          return interaction.followUp({ content: '⚠️ **Automod DESATIVADO!**\n> Servidor sem filtro de mensagens', ephemeral: true });
+        }
+        
+        const map = {
+          'palavrao_on': ['antiPalavrao', true, 'Anti-palavrão ATIVADO'],
+          'palavrao_off': ['antiPalavrao', false, 'Anti-palavrão DESATIVADO'],
+          'link_on': ['antiLink', true, 'Anti-link ATIVADO'],
+          'link_off': ['antiLink', false, 'Anti-link DESATIVADO'],
+          'invite_on': ['antiInvite', true, 'Anti-invite ATIVADO'],
+          'invite_off': ['antiInvite', false, 'Anti-invite DESATIVADO'],
+          'spam_on': ['antiSpam', true, 'Anti-spam ATIVADO'],
+          'spam_off': ['antiSpam', false, 'Anti-spam DESATIVADO'],
+          'caps_on': ['antiCaps', true, 'Anti-caps ATIVADO'],
+          'caps_off': ['antiCaps', false, 'Anti-caps DESATIVADO'],
+        };
+        
+        if(map[acao]){
+          const [key, val, msg] = map[acao];
+          automodConfig[key] = val;
+          salvarAutomod(automodConfig);
+          return interaction.followUp({ content: `✅ **${msg}!**`, ephemeral: true });
+        }
+      }
+      if(interaction.commandName==='backup-servidor'){
+        await interaction.deferReply({ephemeral:true});
+        try{
+          const guild = interaction.guild;
+          const canais = guild.channels.cache.map(c => ({
+            id: c.id,
+            name: c.name,
+            type: c.type,
+            parentId: c.parentId,
+            position: c.position,
+            topic: c.topic || null
+          }));
+          
+          const cargos = guild.roles.cache.filter(r => !r.managed && r.name !== '@everyone').map(r => ({
+            id: r.id,
+            name: r.name,
+            color: r.color,
+            permissions: r.permissions.bitfield.toString(),
+            position: r.position,
+            hoist: r.hoist,
+            mentionable: r.mentionable
+          }));
+          
+          const backup = {
+            guildId: guild.id,
+            guildName: guild.name,
+            createdAt: new Date().toISOString(),
+            canais,
+            cargos,
+            totalCanais: canais.length,
+            totalCargos: cargos.length
+          };
+          
+          const backupStr = JSON.stringify(backup, null, 2);
+          const filePath = `./backup-${guild.id}-${Date.now()}.json`;
+          fs.writeFileSync(filePath, backupStr);
+          
+          const file = new AttachmentBuilder(filePath);
+          const embed = new EmbedBuilder()
+            .setColor(0x00FF7F)
+            .setTitle('💾 BACKUP DO SERVIDOR CRIADO!')
+            .setDescription(
+`**Servidor:** ${guild.name}
+**Canais salvos:** ${canais.length}
+**Cargos salvos:** ${cargos.length}
+**Data:** <t:${Math.floor(Date.now()/1000)}:F>
+
+> Backup salvo com sucesso!
+> Guarde este arquivo em local seguro
+> Em caso de ataque, use para restaurar
+
+**⚠️ IMPORTANTE:**
+> Este arquivo contém estrutura do servidor
+> Não compartilhe com desconhecidos
+`
+            )
+            .setFooter({ text: 'Leviathan Accounts • Sistema de Backup' });
+          
+          await interaction.followUp({ embeds: [embed], files: [file], ephemeral: true });
+          fs.unlinkSync(filePath);
+        }catch(e){
+          await interaction.followUp({ content: `❌ Erro ao criar backup: ${e.message}`, ephemeral: true });
+        }
+        return;
       }
     }
 
