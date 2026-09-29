@@ -9,15 +9,15 @@ services:
       - key: DISCORD_TOKEN
         sync: false
       - key: GUILD_ID
-        sync: 1430243817801519286
+        sync: false
       - key: STAFF_ROLE_ID
-        sync: 1554489184327311390
+        sync: false
       - key: CATEGORIA_TICKET_ID
-        sync: 1453839122111139912
+        sync: false
       - key: CANAL_VENDAS_ID
-        sync: 1453839425078296668
+        sync: false
       - key: PIX_KEY
-        sync: ce767a59-4472-4fc8-8f5e-5189f97d6bf1
+        sync: false
       - key: PIX_NOME
         value: Leviathan Accounts
       - key: CARGO_CLIENTE_ID
