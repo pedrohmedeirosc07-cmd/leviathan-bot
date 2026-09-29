@@ -1959,16 +1959,36 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
         const canalOpt = interaction.options.getChannel('canal');
         const targetChannel = canalOpt || interaction.channel;
         const guild = interaction.guild;
+        
+        // Verifica permissão do bot primeiro
+        if(!guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles)){
+          return interaction.followUp({ content: '❌ **Bot sem permissão!**\n> Preciso da permissão **Gerenciar Cargos** para criar os cargos de ping.\n> Dá essa permissão pra mim e tenta de novo!', ephemeral: true });
+        }
+        
         const cargosCriados = [];
-        for(const ping of pingsConfig.cargos){
-          let role = guild.roles.cache.find(r => r.name.toLowerCase() === ping.nome.toLowerCase() || r.name.toLowerCase().includes(ping.id));
+        const cargosExistentes = [];
+        
+        // Cria todos os cargos em paralelo - MUITO mais rápido
+        const promessas = pingsConfig.cargos.map(async (ping) => {
+          let role = guild.roles.cache.find(r => r.name === ping.nome || r.name.toLowerCase().includes(ping.id.toLowerCase()));
           if(!role){
             try{
-              role = await guild.roles.create({ name: ping.nome, color: ping.cor, reason: 'Cargo de ping Leviathan', mentionable: true });
+              role = await guild.roles.create({ name: ping.nome, color: ping.cor, reason: 'Cargo de ping Leviathan - sistema de notificações', mentionable: true });
               cargosCriados.push(role.name);
-            }catch(e){ console.log('Erro criar cargo '+ping.nome+': '+e.message); }
+              return role;
+            }catch(e){
+              console.log('Erro criar cargo '+ping.nome+': '+e.message);
+              return null;
+            }
+          } else {
+            cargosExistentes.push(role.name);
+            return role;
           }
-        }
+        });
+        
+        // Aguarda todas as criações (máximo 3 segundos)
+        await Promise.all(promessas).catch(()=>{});
+        
         const embed = new EmbedBuilder()
           .setColor(0xFFD700)
           .setAuthor({ name: 'LEVIATHAN ACCOUNTS • NOTIFICAÇÕES', iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
@@ -1980,8 +2000,13 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
         const row1 = new ActionRowBuilder().addComponents(...pingsConfig.cargos.slice(0,3).map(p => new ButtonBuilder().setCustomId('ping_'+p.id).setLabel(p.nome.replace(/[^\w\s]/gi,'').trim().slice(0,20)).setStyle(ButtonStyle.Secondary).setEmoji(p.emoji)));
         const row2 = new ActionRowBuilder().addComponents(...pingsConfig.cargos.slice(3,6).map(p => new ButtonBuilder().setCustomId('ping_'+p.id).setLabel(p.nome.replace(/[^\w\s]/gi,'').trim().slice(0,20)).setStyle(ButtonStyle.Secondary).setEmoji(p.emoji)));
         const row3 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ping_todos').setLabel('Ativar Todos').setStyle(ButtonStyle.Success).setEmoji('✅'), new ButtonBuilder().setCustomId('ping_remover_todos').setLabel('Remover Todos').setStyle(ButtonStyle.Danger).setEmoji('❌'));
-        await targetChannel.send({ embeds: [embed], components: [row1, row2, row3] });
-        return interaction.followUp({ content: '✅ **Painel de pings criado em '+targetChannel+'!**\n> Cargos criados: '+(cargosCriados.join(', ') || 'já existiam')+'\n> Pronto para uso!', ephemeral: true });
+        
+        try {
+          await targetChannel.send({ embeds: [embed], components: [row1, row2, row3] });
+          return interaction.followUp({ content: '✅ **Painel de pings criado em '+targetChannel+'!**\n> Novos: '+(cargosCriados.join(', ') || 'nenhum')+'\n> Existentes: '+(cargosExistentes.join(', ') || 'nenhum')+'\n> Total: '+pingsConfig.cargos.length+' cargos\n> Pronto para uso!', ephemeral: true });
+        } catch(e){
+          return interaction.followUp({ content: '❌ Erro ao enviar painel: '+e.message+'\n> Verifica se tenho permissão para enviar mensagens em '+targetChannel, ephemeral: true });
+        }
       }
       if(interaction.commandName==='ping'){
         await interaction.deferReply({ephemeral:false});
