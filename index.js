@@ -7,8 +7,8 @@ const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectM
 const STAFF_ROLE_ID = process.env.STAFF_ROLE_ID || null;
 const CATEGORIA_TICKET_ID = process.env.CATEGORIA_TICKET_ID || null;
 const CANAL_VENDAS_ID = process.env.CANAL_VENDAS_ID || null;
-const CANAL_AVALIACOES_ID = process.env.CANAL_AVALIACOES_ID || null;
-const PIX_KEY = process.env.PIX_KEY || 'SUA_CHAVE_ALEATORIA_AQUI';
+const CANAL_AVALIACOES_ID = process.env.CANAL_AVALIACOES_ID || '1554485743278100602';
+const PIX_KEY = process.env.PIX_KEY || 'ce767a59-4472-4fc8-8f5e-5189f97d6bf1';
 const PIX_NOME = process.env.PIX_NOME || 'Leviathan Accounts';
 const ESTOQUE_FILE = './estoque.json';
 const PAINEL_FILE = './painel.json';
@@ -490,6 +490,19 @@ const commands = [
        { name: 'Whitelist Remove', value: 'whitelist_remove' }
      ))
      .addUserOption(o => o.setName('usuario').setDescription('Usuário para whitelist').setRequired(false)),
+    new SlashCommandBuilder().setName('setup-pings').setDescription('🔔 Cria painel de cargos de notificação/pings').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+     .addChannelOption(o => o.setName('canal').setDescription('Canal onde vai o painel de pings').setRequired(false)),
+    new SlashCommandBuilder().setName('ping').setDescription('📢 Envia ping para um cargo de notificação').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+     .addStringOption(o => o.setName('cargo').setDescription('Qual cargo pingar').setRequired(true).addChoices(
+       { name: '🔔 Notificações', value: 'notificacoes' },
+       { name: '💰 Promoções', value: 'promocoes' },
+       { name: '📦 Restock', value: 'restock' },
+       { name: '🎉 Sorteios', value: 'sorteios' },
+       { name: '⚡ Atualizações', value: 'atualizacoes' },
+       { name: '🤝 Parcerias', value: 'parcerias' },
+       { name: '👥 Todos com ping', value: 'todos' }
+     ))
+     .addStringOption(o => o.setName('mensagem').setDescription('Mensagem do ping').setRequired(true)),
     new SlashCommandBuilder().setName('backup-servidor').setDescription('💾 Cria backup do servidor (canais e cargos)').setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     new SlashCommandBuilder().setName('automod').setDescription('🤖 Configura anti-palavrão, anti-link, anti-spam').setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
      .addStringOption(o => o.setName('acao').setDescription('Ação').setRequired(true).addChoices(
@@ -1030,7 +1043,7 @@ client.on('webhookUpdate', async (channel) => {
   }catch(e){ console.log('Erro webhookUpdate:', e.message); }
 });
 
-// ===== ANTI @everyone + AUTOMOD MODULAR =====
+// ===== ANTI @everyone + AUTOMOD (PALAVRÃO, LINK, SPAM, CAPS) =====
 client.on('messageCreate', async (message) => {
   if(!message.guild) return;
   if(!isGuildAllowed(message.guild.id)) return;
@@ -1062,22 +1075,91 @@ client.on('messageCreate', async (message) => {
     }catch(e){ console.log('Erro mention:', e.message); }
   }
   
-  // Anti link de webhook / token (protege contra roubo)
-  if(message.content.includes('discord.com/api/webhooks')){
+  // Anti link de webhook / token
+  if(message.content.includes('discord.com/api/webhooks') || message.content.includes('https://discord.com/api/webhooks')){
     await message.delete().catch(()=>{});
     console.log(`🛡️ Webhook link deletado de ${message.author.tag}`);
     return;
   }
 
-  // ===== AUTOMOD MODULAR - chama arquivo automod.js =====
-  try{
-    await automod.handleMessage(message, isWhitelisted, isTicketChannel);
-  }catch(e){
-    console.log('Erro automod handle:', e.message);
+  // ===== AUTOMOD - SÓ RODA SE ATIVADO =====
+  if(!automodConfig.enabled) return;
+  
+  // Ignora canais configurados
+  if(automodConfig.ignoreChannels.includes(message.channel.id)) return;
+  // Ignora cargos configurados
+  if(message.member && message.member.roles.cache.some(r => automodConfig.ignoreRoles.includes(r.id))) return;
+
+  const content = message.content;
+  const channelName = (message.channel.name || '').toLowerCase();
+  const isParceriaChannel = channelName.includes('parceria') || channelName.includes('parcerias') || channelName.includes('🤝') || channelName.includes('divulga') || channelName.includes('partners');
+  
+  // Se for ticket, verifica se é ticket de parceria - se for, libera links/invites
+  let isParceriaTicket = false;
+  if(isTicketChannel(message.channel)){
+    // Se for ticket de parceria, libera invites
+    if(channelName.includes('parceria') || channelName.includes('🤝')){
+      isParceriaTicket = true;
+    } else {
+      // Se for qualquer outro ticket (suporte, dúvida, etc), ignora automod completamente
+      if(!isParceriaChannel){
+        return;
+      }
+    }
+  }
+
+  // 1. ANTI PALAVRÃO
+  if(automodConfig.antiPalavrao){
+    const palavrãoEncontrado = containsPalavrao(content);
+    if(palavrãoEncontrado){
+      console.log(`🤬 Automod palavrão: ${message.author.tag} disse "${palavrãoEncontrado}"`);
+      await applyAutomodPunishment(message.member, `Palavrão detectado: \`${palavrãoEncontrado}\``, message);
+      return;
+    }
+  }
+
+  // 2. ANTI INVITE (discord.gg) - LIBERADO EM CANAL DE PARCERIA
+  if(automodConfig.antiInvite && !isParceriaChannel && !isParceriaTicket){
+    if(INVITE_REGEX.test(content)){
+      console.log(`🔗 Automod invite: ${message.author.tag} mandou invite`);
+      await applyAutomodPunishment(message.member, `Link de convite Discord não permitido`, message);
+      return;
+    }
+  }
+
+  // 3. ANTI LINK (qualquer link) - LIBERADO EM CANAL DE PARCERIA
+  if(automodConfig.antiLink && !isParceriaChannel && !isParceriaTicket){
+    const allowedDomains = ['imgur.com', 'i.imgur.com', 'youtube.com', 'youtu.be', 'tenor.com', 'giphy.com'];
+    const hasLink = LINK_REGEX.test(content);
+    if(hasLink){
+      const isAllowed = allowedDomains.some(d => content.toLowerCase().includes(d));
+      if(!isAllowed){
+        console.log(`🔗 Automod link: ${message.author.tag} mandou link`);
+        await applyAutomodPunishment(message.member, `Links não são permitidos aqui`, message);
+        return;
+      }
+    }
+  }
+
+  // 4. ANTI SPAM / FLOOD
+  if(automodConfig.antiSpam || automodConfig.antiFlood){
+    const spamResult = checkSpam(message.author.id, content);
+    if(spamResult){
+      if(spamResult.type === 'flood'){
+        console.log(`💬 Automod flood: ${message.author.tag} - ${spamResult.count} msgs em 5s`);
+        await applyAutomodPunishment(message.member, `Flood - ${spamResult.count} mensagens em 5 segundos`, message);
+        return;
+      }
+      if(spamResult.type === 'repeat' || spamResult.type === 'same'){
+        console.log(`🔁 Automod repeat: ${message.author.tag} - repetindo mensagem`);
+        await applyAutomodPunishment(message.member, `Spam - Mensagem repetida ${spamResult.count}x`, message);
+        return;
+      }
+    }
   }
 });
 
-console.log('🛡️ Sistema anti-nuke + Automod modular carregado!');
+console.log('🛡️ Sistema anti-nuke + Automod carregado com sucesso!');
 
 
 async function gerarPainelUnico(){
@@ -1121,8 +1203,7 @@ ${estoque.length===0 ? '> *Nenhum produto no momento - Aguarde restock*\n> Conta
      { name: '🛡️ Suporte', value: 'VIP 24/7\nAtendimento rápido', inline: true },
      { name: '📦 Estoque Total', value: `${totalContas} contas\nVerificadas`, inline: true },
      { name: '💳 Pagamento', value: 'Pix • Nubank\nSeguro', inline: true },
-     { name: '⭐ Avaliação', value: '5.0 • 1000+\nVendas', inline: true },
-   )
+        )
    .setFooter({ text: `Leviathan Accounts • ${totalContas} contas disponíveis • Loja Oficial desde 2024`, iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
    .setTimestamp();
 
@@ -1267,7 +1348,7 @@ function gerarPainelTicketsProfissional(){
 
 **⚡ TEMPO MÉDIO DE RESPOSTA:** \`2 minutos\`
 **🛡️ EQUIPE ONLINE:** <@&${STAFF_ROLE_ID || 'STAFF'}>
-**⭐ AVALIAÇÃO:** \`5.0/5.0 • 1000+ atendimentos\`
+**⭐ AVALIAÇÃO:** \`\`
 
 ---
 **👇 SELECIONE O TIPO DE ATENDIMENTO:**
@@ -1483,13 +1564,26 @@ ${CARGOS_CLIENTE.slice().reverse().map(c=>`${dados.totalGasto >= c.minimo ? '✅
         return;
       }
 
-      // Comandos só staff (exceto meu-saldo e fechar)
+      // ===== APENAS STAFF PODE USAR COMANDOS DE CONFIGURAÇÃO =====
       const comandosLivres = ['meu-saldo', 'fechar'];
+      const comandosStaffOnly = ['painel-vendas', 'setup-tickets', 'painel-tickets', 'criar-combo', 'add-opcao', 'add-credencial', 'ver-estoque', 'limpar-estoque', 'add-rapido', 'importar-lote', 'editar-preco', 'saldo-cliente', 'ticket-add', 'ticket-remove', 'ver-avaliacoes', 'antiraid', 'backup-servidor', 'automod', 'setup-pings', 'ping'];
+      
+      if(comandosStaffOnly.includes(interaction.commandName)){
+        const hasStaffRole = STAFF_ROLE_ID && interaction.member.roles.cache.has(STAFF_ROLE_ID);
+        const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+        const isOwner = interaction.guild.ownerId === interaction.user.id;
+        if(!hasStaffRole && !isAdmin && !isOwner){
+          return interaction.reply({ content: '❌ **Sem permissão!**\n> Apenas a equipe <@&'+STAFF_ROLE_ID+'> pode usar este comando!', ephemeral: true });
+        }
+      }
+      
       if(!comandosLivres.includes(interaction.commandName) && !isStaff(interaction) && !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)){
-        // Permite staff por cargo OU por permissão de gerenciar servidor
         const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
         if(!isAdmin){
-          return interaction.reply({ content: '❌ Sem permissão - Só staff pode usar este comando', ephemeral: true });
+          const hasStaffRole = STAFF_ROLE_ID && interaction.member.roles.cache.has(STAFF_ROLE_ID);
+          if(!hasStaffRole){
+            return interaction.reply({ content: '❌ Sem permissão - Só staff pode usar este comando', ephemeral: true });
+          }
         }
       }
 
@@ -1860,6 +1954,59 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
           return interaction.followUp({ content: `✅ **${msg}!**`, ephemeral: true });
         }
       }
+      if(interaction.commandName==='setup-pings'){
+        await interaction.deferReply({ephemeral:true});
+        const canalOpt = interaction.options.getChannel('canal');
+        const targetChannel = canalOpt || interaction.channel;
+        const guild = interaction.guild;
+        const cargosCriados = [];
+        for(const ping of pingsConfig.cargos){
+          let role = guild.roles.cache.find(r => r.name.toLowerCase() === ping.nome.toLowerCase() || r.name.toLowerCase().includes(ping.id));
+          if(!role){
+            try{
+              role = await guild.roles.create({ name: ping.nome, color: ping.cor, reason: 'Cargo de ping Leviathan', mentionable: true });
+              cargosCriados.push(role.name);
+            }catch(e){ console.log('Erro criar cargo '+ping.nome+': '+e.message); }
+          }
+        }
+        const embed = new EmbedBuilder()
+          .setColor(0xFFD700)
+          .setAuthor({ name: 'LEVIATHAN ACCOUNTS • NOTIFICAÇÕES', iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
+          .setTitle('🔔 ESCOLHA SUAS NOTIFICAÇÕES')
+          .setDescription('### Bem-vindo ao sistema de pings da Leviathan!\n\n> Selecione abaixo quais notificações você quer receber\n> Você pode escolher várias e mudar quando quiser\n\n**📋 Cargos disponíveis:**\n\n'+pingsConfig.cargos.map(p => '> '+p.emoji+' **'+p.nome+'** - '+p.descricao).join('\n')+'\n\n**🎯 Como funciona:**\n> Clique nos botões abaixo para **ativar/desativar**\n> Verde = você tem o cargo | Cinza = você não tem\n> Use para não perder promoções e novidades!\n\n**⚡ Dica:** Ative **Notificações** para receber tudo!\n')
+          .setThumbnail('https://i.imgur.com/8QJ4sQy.png')
+          .setFooter({ text: 'Leviathan Accounts • Clique para ativar/desativar • Sistema de pings' })
+          .setTimestamp();
+        const row1 = new ActionRowBuilder().addComponents(...pingsConfig.cargos.slice(0,3).map(p => new ButtonBuilder().setCustomId('ping_'+p.id).setLabel(p.nome.replace(/[^\w\s]/gi,'').trim().slice(0,20)).setStyle(ButtonStyle.Secondary).setEmoji(p.emoji)));
+        const row2 = new ActionRowBuilder().addComponents(...pingsConfig.cargos.slice(3,6).map(p => new ButtonBuilder().setCustomId('ping_'+p.id).setLabel(p.nome.replace(/[^\w\s]/gi,'').trim().slice(0,20)).setStyle(ButtonStyle.Secondary).setEmoji(p.emoji)));
+        const row3 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ping_todos').setLabel('Ativar Todos').setStyle(ButtonStyle.Success).setEmoji('✅'), new ButtonBuilder().setCustomId('ping_remover_todos').setLabel('Remover Todos').setStyle(ButtonStyle.Danger).setEmoji('❌'));
+        await targetChannel.send({ embeds: [embed], components: [row1, row2, row3] });
+        return interaction.followUp({ content: '✅ **Painel de pings criado em '+targetChannel+'!**\n> Cargos criados: '+(cargosCriados.join(', ') || 'já existiam')+'\n> Pronto para uso!', ephemeral: true });
+      }
+      if(interaction.commandName==='ping'){
+        await interaction.deferReply({ephemeral:false});
+        const cargoId = interaction.options.getString('cargo');
+        const mensagem = interaction.options.getString('mensagem');
+        const guild = interaction.guild;
+        let rolesToPing = [];
+        if(cargoId === 'todos'){
+          for(const p of pingsConfig.cargos){
+            const role = guild.roles.cache.find(r => r.name.toLowerCase().includes(p.id) || r.name === p.nome);
+            if(role) rolesToPing.push(role);
+          }
+        } else {
+          const pingConfig = pingsConfig.cargos.find(p => p.id === cargoId);
+          if(!pingConfig) return interaction.followUp({ content: '❌ Cargo não encontrado', ephemeral: true });
+          const role = guild.roles.cache.find(r => r.name === pingConfig.nome || r.name.toLowerCase().includes(pingConfig.id));
+          if(!role) return interaction.followUp({ content: '❌ Cargo '+pingConfig.nome+' não existe. Use /setup-pings primeiro!', ephemeral: true });
+          rolesToPing = [role];
+        }
+        if(rolesToPing.length === 0) return interaction.followUp({ content: '❌ Nenhum cargo de ping encontrado. Use /setup-pings para criar!', ephemeral: true });
+        const mentions = rolesToPing.map(r => r.toString()).join(' ');
+        const embed = new EmbedBuilder().setColor(0xFFD700).setAuthor({ name: 'LEVIATHAN ACCOUNTS • AVISO', iconURL: 'https://i.imgur.com/8QJ4sQy.png' }).setTitle((rolesToPing[0]?.name || '📢')+' • Notificação').setDescription(mensagem).setFooter({ text: 'Enviado por '+interaction.user.tag+' • Leviathan Accounts', iconURL: interaction.user.displayAvatarURL() }).setTimestamp();
+        await interaction.followUp({ content: mentions, embeds: [embed], allowedMentions: { roles: rolesToPing.map(r=>r.id) } });
+        return;
+      }
       if(interaction.commandName==='backup-servidor'){
         await interaction.deferReply({ephemeral:true});
         try{
@@ -2148,6 +2295,36 @@ ${estrelas === 5 ? `
       if(interaction.customId==='ticket_notify'){
         await interaction.reply({ content: `🔔 ${STAFF_ROLE_ID ? `<@&${STAFF_ROLE_ID}>` : '@Staff'} **foi notificado!**\n> Equipe chamada por ${interaction.user}`, ephemeral: false });
         return;
+      }
+      if(interaction.customId.startsWith('ping_')){
+        const pingId = interaction.customId.replace('ping_', '');
+        if(pingId === 'todos'){
+          let adicionados = 0;
+          for(const p of pingsConfig.cargos){
+            const role = interaction.guild.roles.cache.find(r => r.name === p.nome || r.name.toLowerCase().includes(p.id));
+            if(role && !interaction.member.roles.cache.has(role.id)){ try{ await interaction.member.roles.add(role); adicionados++; }catch{} }
+          }
+          return interaction.reply({ content: `✅ **${adicionados} cargos de notificação ativados!**\n> Agora você vai receber todos os pings da loja!`, ephemeral: true });
+        }
+        if(pingId === 'remover_todos'){
+          let removidos = 0;
+          for(const p of pingsConfig.cargos){
+            const role = interaction.guild.roles.cache.find(r => r.name === p.nome || r.name.toLowerCase().includes(p.id));
+            if(role && interaction.member.roles.cache.has(role.id)){ try{ await interaction.member.roles.remove(role); removidos++; }catch{} }
+          }
+          return interaction.reply({ content: `❌ **${removidos} cargos removidos!**\n> Você não vai mais receber pings`, ephemeral: true });
+        }
+        const pingConfig = pingsConfig.cargos.find(p => p.id === pingId);
+        if(!pingConfig) return interaction.reply({ content: '❌ Cargo não encontrado', ephemeral: true });
+        const role = interaction.guild.roles.cache.find(r => r.name === pingConfig.nome || r.name.toLowerCase().includes(pingConfig.id));
+        if(!role) return interaction.reply({ content: `❌ Cargo **${pingConfig.nome}** não existe. Use /setup-pings para criar!`, ephemeral: true });
+        if(interaction.member.roles.cache.has(role.id)){
+          await interaction.member.roles.remove(role).catch(()=>{});
+          return interaction.reply({ content: `❌ **${pingConfig.emoji} ${pingConfig.nome} removido!**\n> Você não vai mais receber esse tipo de notificação`, ephemeral: true });
+        } else {
+          await interaction.member.roles.add(role).catch(()=>{});
+          return interaction.reply({ content: `✅ **${pingConfig.emoji} ${pingConfig.nome} ativado!**\n> ${pingConfig.descricao}`, ephemeral: true });
+        }
       }
     }
 
