@@ -19,11 +19,11 @@ services:
       - key: CANAL_VENDAS_ID
         sync: false
       - key: CANAL_AVALIACOES_ID
-        sync: false
+        value: 1554485743278100602
       - key: CANAL_LOGS_ID
         sync: false
       - key: PIX_KEY
-        sync: false
+        value: ce767a59-4472-4fc8-8f5e-5189f97d6bf1
       - key: PIX_NOME
         value: Leviathan Accounts
       - key: CARGO_CLIENTE_ID
