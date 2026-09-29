@@ -10,15 +10,29 @@ services:
         sync: false
       - key: GUILD_ID
         sync: false
+      - key: OWNER_ID
+        sync: false
       - key: STAFF_ROLE_ID
         sync: false
       - key: CATEGORIA_TICKET_ID
         sync: false
       - key: CANAL_VENDAS_ID
         sync: false
+      - key: CANAL_AVALIACOES_ID
+        sync: false
+      - key: CANAL_LOGS_ID
+        sync: false
       - key: PIX_KEY
         sync: false
       - key: PIX_NOME
         value: Leviathan Accounts
       - key: CARGO_CLIENTE_ID
+        sync: false
+      - key: CARGO_VIP_ID
+        sync: false
+      - key: CARGO_MEGA_ID
+        sync: false
+      - key: CARGO_ULTRA_ID
+        sync: false
+      - key: CARGO_ETERNO_ID
         sync: false
