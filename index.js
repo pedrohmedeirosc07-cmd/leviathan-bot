@@ -569,14 +569,43 @@ const antiNukeCache = {
 };
 
 // ===== SISTEMA AUTOMOD - MODULAR (arquivo separado automod.js) =====
-const automod = require('./automod.js');
-let automodConfig = automod.config;
-const TODOS_PALAVROES = automod.PALAVROES;
-function salvarAutomod(d){ 
-  automod.config = { ...automod.config, ...d };
-  automod.salvar();
-  automodConfig = automod.config;
+let automod;
+try {
+  automod = require('./automod.js');
+} catch {
+  automod = { config: { enabled: false }, PALAVROES: [], salvar: ()=>{}, handleMessage: async()=>{} };
 }
+let automodConfig = automod.config;
+const TODOS_PALAVROES = automod.PALAVROES || [];
+function salvarAutomod(d){ 
+  try {
+    automod.config = { ...automod.config, ...d };
+    automod.salvar();
+    automodConfig = automod.config;
+  } catch {}
+}
+
+// ===== SISTEMA DE PINGS / NOTIFICAÇÕES =====
+const PINGS_FILE = './pings.json';
+const PINGS_DEFAULT = {
+  cargos: [
+    { id: 'notificacoes', nome: '🔔 Notificações', emoji: '🔔', descricao: 'Receba todas as novidades da loja', cor: 0xFFD700 },
+    { id: 'promocoes', nome: '💰 Promoções', emoji: '💰', descricao: 'Ofertas e descontos imperdíveis', cor: 0x00FF7F },
+    { id: 'restock', nome: '📦 Restock', emoji: '📦', descricao: 'Avisado quando tiver novas contas', cor: 0x0099FF },
+    { id: 'sorteios', nome: '🎉 Sorteios', emoji: '🎉', descricao: 'Participe de sorteios exclusivos', cor: 0xFF69B4 },
+    { id: 'atualizacoes', nome: '⚡ Atualizações', emoji: '⚡', descricao: 'Novidades e mudanças na loja', cor: 0xFF4500 },
+    { id: 'parcerias', nome: '🤝 Parcerias', emoji: '🤝', descricao: 'Seja avisado de novas parcerias', cor: 0x9370DB }
+  ]
+};
+function carregarPings(){
+  if(!fs.existsSync(PINGS_FILE)){
+    fs.writeFileSync(PINGS_FILE, JSON.stringify(PINGS_DEFAULT, null, 2));
+    return PINGS_DEFAULT;
+  }
+  try { return JSON.parse(fs.readFileSync(PINGS_FILE, 'utf8')); } catch { return PINGS_DEFAULT; }
+}
+function salvarPings(d){ fs.writeFileSync(PINGS_FILE, JSON.stringify(d, null, 2)); }
+let pingsConfig = carregarPings();
 
 function isWhitelisted(userId, memberOrGuild){
   if(!userId) return false;
