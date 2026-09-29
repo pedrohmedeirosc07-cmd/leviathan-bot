@@ -1955,45 +1955,16 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
         }
       }
       if(interaction.commandName==='setup-pings'){
-        await interaction.deferReply({ephemeral:true});
         const canalOpt = interaction.options.getChannel('canal');
         const targetChannel = canalOpt || interaction.channel;
         const guild = interaction.guild;
         
-        // Verifica permissão do bot primeiro
-        if(!guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles)){
-          return interaction.followUp({ content: '❌ **Bot sem permissão!**\n> Preciso da permissão **Gerenciar Cargos** para criar os cargos de ping.\n> Dá essa permissão pra mim e tenta de novo!', ephemeral: true });
-        }
-        
-        const cargosCriados = [];
-        const cargosExistentes = [];
-        
-        // Cria todos os cargos em paralelo - MUITO mais rápido
-        const promessas = pingsConfig.cargos.map(async (ping) => {
-          let role = guild.roles.cache.find(r => r.name === ping.nome || r.name.toLowerCase().includes(ping.id.toLowerCase()));
-          if(!role){
-            try{
-              role = await guild.roles.create({ name: ping.nome, color: ping.cor, reason: 'Cargo de ping Leviathan - sistema de notificações', mentionable: true });
-              cargosCriados.push(role.name);
-              return role;
-            }catch(e){
-              console.log('Erro criar cargo '+ping.nome+': '+e.message);
-              return null;
-            }
-          } else {
-            cargosExistentes.push(role.name);
-            return role;
-          }
-        });
-        
-        // Aguarda todas as criações (máximo 3 segundos)
-        await Promise.all(promessas).catch(()=>{});
-        
+        // ENVIA O PAINEL INSTANTANEAMENTE - sem esperar criar cargos
         const embed = new EmbedBuilder()
           .setColor(0xFFD700)
           .setAuthor({ name: 'LEVIATHAN ACCOUNTS • NOTIFICAÇÕES', iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
           .setTitle('🔔 ESCOLHA SUAS NOTIFICAÇÕES')
-          .setDescription('### Bem-vindo ao sistema de pings da Leviathan!\n\n> Selecione abaixo quais notificações você quer receber\n> Você pode escolher várias e mudar quando quiser\n\n**📋 Cargos disponíveis:**\n\n'+pingsConfig.cargos.map(p => '> '+p.emoji+' **'+p.nome+'** - '+p.descricao).join('\n')+'\n\n**🎯 Como funciona:**\n> Clique nos botões abaixo para **ativar/desativar**\n> Verde = você tem o cargo | Cinza = você não tem\n> Use para não perder promoções e novidades!\n\n**⚡ Dica:** Ative **Notificações** para receber tudo!\n')
+          .setDescription('### Bem-vindo ao sistema de pings da Leviathan!\n\n> Selecione abaixo quais notificações você quer receber\n> Você pode escolher várias e mudar quando quiser\n\n**📋 Cargos disponíveis:**\n\n'+pingsConfig.cargos.map(p => '> '+p.emoji+' **'+p.nome+'** - '+p.descricao).join('\n')+'\n\n**🎯 Como funciona:**\n> Clique nos botões abaixo para **ativar/desativar**\n> Use para não perder promoções e novidades!\n\n**⚡ Dica:** Ative **Notificações** para receber tudo!\n')
           .setThumbnail('https://i.imgur.com/8QJ4sQy.png')
           .setFooter({ text: 'Leviathan Accounts • Clique para ativar/desativar • Sistema de pings' })
           .setTimestamp();
@@ -2003,10 +1974,26 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
         
         try {
           await targetChannel.send({ embeds: [embed], components: [row1, row2, row3] });
-          return interaction.followUp({ content: '✅ **Painel de pings criado em '+targetChannel+'!**\n> Novos: '+(cargosCriados.join(', ') || 'nenhum')+'\n> Existentes: '+(cargosExistentes.join(', ') || 'nenhum')+'\n> Total: '+pingsConfig.cargos.length+' cargos\n> Pronto para uso!', ephemeral: true });
+          await interaction.reply({ content: '✅ **Painel de pings criado em '+targetChannel+'!**\n> Criando cargos em segundo plano...', ephemeral: true });
         } catch(e){
-          return interaction.followUp({ content: '❌ Erro ao enviar painel: '+e.message+'\n> Verifica se tenho permissão para enviar mensagens em '+targetChannel, ephemeral: true });
+          return interaction.reply({ content: '❌ Erro ao enviar painel: '+e.message, ephemeral: true });
         }
+        
+        // Cria cargos em segundo plano - não trava o comando
+        setImmediate(async () => {
+          if(!guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) return;
+          for(const ping of pingsConfig.cargos){
+            let role = guild.roles.cache.find(r => r.name === ping.nome || r.name.toLowerCase().includes(ping.id.toLowerCase()));
+            if(!role){
+              try{
+                await guild.roles.create({ name: ping.nome, color: ping.cor, reason: 'Cargo de ping Leviathan', mentionable: true });
+                await new Promise(r => setTimeout(r, 600)); // evita rate limit
+              }catch(e){ console.log('Erro cargo '+ping.nome+': '+e.message); }
+            }
+          }
+          console.log('✅ Cargos de ping criados/verificados');
+        });
+        return;
       }
       if(interaction.commandName==='ping'){
         await interaction.deferReply({ephemeral:false});
