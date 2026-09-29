@@ -271,6 +271,9 @@ try {
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages] });
 
+// Anti-duplicação de carrinho - evita criar 2 tickets se clicar 2x rápido
+const comprasRecentes = new Map(); // userId -> timestamp
+
 function carregar() { 
   try {
     if (!fs.existsSync(ESTOQUE_FILE)) { 
@@ -811,6 +814,33 @@ ${dados.compras.length>0 ? dados.compras.map(c=>`> ${c.produto} - R$ ${c.preco.t
 
     if(interaction.isStringSelectMenu() && interaction.customId==='comprar_select'){
       const raw = interaction.values[0];
+      
+      // ===== ANTI-DUPLICAÇÃO: Se clicou 2x em menos de 5 segundos, ignora =====
+      const userId = interaction.user.id;
+      const agora = Date.now();
+      const ultimo = comprasRecentes.get(userId);
+      if(ultimo && (agora - ultimo) < 5000){
+        console.log(`⚠️ Compra duplicada bloqueada para ${interaction.user.tag} - clicou 2x rápido`);
+        return interaction.reply({ content: '⚠️ **Calma!** Você já criou um carrinho há poucos segundos.\n> Verifique seus canais - já tem um ticket aberto pra você!', ephemeral: true });
+      }
+      comprasRecentes.set(userId, agora);
+      // Limpa após 10 segundos
+      setTimeout(() => comprasRecentes.delete(userId), 10000);
+      
+      // ===== Verifica se já tem ticket aberto =====
+      try {
+        const canais = interaction.guild.channels.cache.filter(c => 
+          c.type === ChannelType.GuildText && 
+          c.name.includes(interaction.user.username.toLowerCase().slice(0,10)) &&
+          c.parentId === CATEGORIA_TICKET_ID
+        );
+        if(canais.size > 0){
+          const canalExistente = canais.first();
+          console.log(`⚠️ Usuário ${interaction.user.tag} já tem ticket: ${canalExistente.name}`);
+          return interaction.reply({ content: `⚠️ **Você já tem um carrinho aberto!**\n> Vá para ${canalExistente}\n> Feche o ticket atual antes de abrir outro.`, ephemeral: true });
+        }
+      } catch(e){ console.log('Erro ao verificar tickets existentes:', e.message); }
+      
       console.log('COMPRA TENTATIVA:', raw);
       const estoque=carregar();
       console.log('ESTOQUE:', JSON.stringify(estoque).slice(0,1000));
@@ -873,22 +903,27 @@ ${dados.compras.length>0 ? dados.compras.map(c=>`> ${c.produto} - R$ ${c.preco.t
         console.log('FALHA BUSCA FINAL:', raw, 'tentou label:', opcaoLabel);
         // NÃO mostra erro falso - tenta atualizar painel e mostra estoque real
         await atualizarPainelUnico().catch(()=>{});
+        comprasRecentes.delete(userId); // libera pra tentar de novo
         return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL NO MOMENTO**\n\n> Não achei **'+opcaoLabel+'** no estoque atual.\n> O painel foi atualizado automaticamente.\n> Tente novamente no novo painel!',ephemeral:true});
       }
       
       if(!opcao.contas || opcao.contas.length===0){
         await atualizarPainelUnico().catch(()=>{});
+        comprasRecentes.delete(userId); // libera pra tentar de novo
         return interaction.reply({content:'🔴 **ESTOQUE INDISPONIVEL!**\n\n> **'+opcao.label+'** esgotou agora mesmo!\n> Escolha outra opção.',ephemeral:true});
       }
+
+      // Defer pra não dar timeout enquanto cria canal
+      await interaction.deferReply({ ephemeral: true });
 
       const ticket=await interaction.guild.channels.create({
         name:`🛒・${interaction.user.username}-${opcao.label.toLowerCase().replace(/[^a-z0-9]/g,'-')}`.slice(0,90),
         type:ChannelType.GuildText,
-        parent:CATEGORIA_TICKET_ID,
+        parent:CATEGORIA_TICKET_ID || undefined,
         permissionOverwrites:[
           {id:interaction.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},
           {id:interaction.user.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory,PermissionFlagsBits.AttachFiles]},
-          {id:STAFF_ROLE_ID,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory,PermissionFlagsBits.ManageChannels]}
+          ...(STAFF_ROLE_ID ? [{id:STAFF_ROLE_ID,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory,PermissionFlagsBits.ManageChannels]}] : [])
         ]
       });
 
@@ -955,8 +990,8 @@ Garantia: 7 dias
         new ButtonBuilder().setCustomId(`confirmar_pagamento_${combo.id}||${opcao.label}`).setLabel('✅ Confirmar Pagamento e Entregar').setStyle(ButtonStyle.Success)
       );
 
-      await ticket.send({ content: `${interaction.user} <@&${STAFF_ROLE_ID}> • Pedido criado`, embeds: [embedProd, embedPay], components: [row1, row2, row3] });
-      await interaction.reply({ content: `✅ Carrinho criado! Vá para ${ticket}`, ephemeral: true });
+      await ticket.send({ content: `${interaction.user} ${STAFF_ROLE_ID ? `<@&${STAFF_ROLE_ID}>` : ''} • Pedido criado`, embeds: [embedProd, embedPay], components: [row1, row2, row3] });
+      await interaction.followUp({ content: `✅ Carrinho criado! Vá para ${ticket}`, ephemeral: true });
     }
 
     if(interaction.isButton()){
