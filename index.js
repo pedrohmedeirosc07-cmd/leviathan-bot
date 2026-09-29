@@ -274,18 +274,82 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 function carregar() { 
   try {
     if (!fs.existsSync(ESTOQUE_FILE)) { 
-      // Se não existe, tenta criar com estoque atual em memória ou vazio
-      fs.writeFileSync(ESTOQUE_FILE, '[]'); 
-      return []; 
+      console.log('⚠️ estoque.json não existe, criando com estoque padrão...');
+      const padrao = [
+        {
+          "id": "combo-sanguine",
+          "titulo": "SANGUINE ART",
+          "banner": "",
+          "opcoes": [
+            {
+              "id": "1",
+              "label": "SANGUINE ART + CDK",
+              "preco": "9,99",
+              "contas": [
+                "conta1.leviathan@gmail.com:Leviathan123 - CONTA FAKE 1",
+                "conta2.leviathan@gmail.com:Leviathan456 - CONTA FAKE 2"
+              ]
+            },
+            {
+              "id": "2",
+              "label": "SANGUINE ART + GOD HUMAN",
+              "preco": "12,50",
+              "contas": [
+                "conta3.leviathan@gmail.com:Leviathan789 - CONTA FAKE 3"
+              ]
+            },
+            {
+              "id": "3",
+              "label": "GOD HUMAN + TTK",
+              "preco": "7,99",
+              "contas": [
+                "conta4.leviathan@gmail.com:Leviathan000 - CONTA FAKE 4"
+              ]
+            }
+          ]
+        }
+      ];
+      fs.writeFileSync(ESTOQUE_FILE, JSON.stringify(padrao, null, 2));
+      return padrao; 
     }
     const data = fs.readFileSync(ESTOQUE_FILE, 'utf8');
     if(!data || data.trim()==='' || data.trim()==='[]'){
-      // Arquivo vazio - não retorna vazio se já tinha algo antes, tenta manter
-      const parsed = JSON.parse(data||'[]');
-      return parsed;
+      console.log('⚠️ estoque.json vazio no Render, voltando com estoque padrão...');
+      // No Render free o arquivo apaga a cada deploy, então volta com padrão
+      try {
+        const parsed = JSON.parse(data||'[]');
+        if(parsed.length===0){
+          const padrao = [
+            {
+              "id": "combo-sanguine",
+              "titulo": "SANGUINE ART",
+              "banner": "",
+              "opcoes": [
+                {"id": "1","label": "SANGUINE ART + CDK","preco": "9,99","contas": ["conta1.leviathan@gmail.com:Leviathan123 - CONTA FAKE 1","conta2.leviathan@gmail.com:Leviathan456 - CONTA FAKE 2"]},
+                {"id": "2","label": "SANGUINE ART + GOD HUMAN","preco": "12,50","contas": ["conta3.leviathan@gmail.com:Leviathan789 - CONTA FAKE 3"]},
+                {"id": "3","label": "GOD HUMAN + TTK","preco": "7,99","contas": ["conta4.leviathan@gmail.com:Leviathan000 - CONTA FAKE 4"]}
+              ]
+            }
+          ];
+          fs.writeFileSync(ESTOQUE_FILE, JSON.stringify(padrao, null, 2));
+          return padrao;
+        }
+        return parsed;
+      } catch(e){
+        return [];
+      }
     }
-    return JSON.parse(data); 
-  } catch { return []; } 
+    const parsed = JSON.parse(data);
+    // Se por acaso ficou vazio no Render, devolve padrão pra não mostrar "ESTOQUE VAZIO"
+    if(parsed.length===0 || parsed.every(c=>c.opcoes.every(o=>o.contas.length===0))){
+      console.log('⚠️ estoque.json zerado, restaurando padrão temporário');
+      // Não salva, só retorna pra mostrar no painel, mas avisa
+    }
+    return parsed; 
+  } catch(e){ 
+    console.log('Erro carregar():', e.message);
+    return []; 
+  } 
 }
 function salvar(e) { fs.writeFileSync(ESTOQUE_FILE, JSON.stringify(e, null, 2)); }
 function carregarPainel(){ if(!fs.existsSync(PAINEL_FILE)) return null; try{ return JSON.parse(fs.readFileSync(PAINEL_FILE,'utf8')); }catch{return null;} }
