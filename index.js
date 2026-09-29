@@ -637,12 +637,35 @@ async function atualizarPainelUnico(){
 
 // ===== SISTEMA DE TICKETS PROFISSIONAL LEVIATHAN =====
 const TICKET_TYPES = {
-  compra: { label: '🛒 Comprar Conta', emoji: '🛒', desc: 'Quero comprar uma conta', color: 0xFFD700 },
   suporte: { label: '🎫 Suporte', emoji: '🎫', desc: 'Problema com minha conta', color: 0xFF4444 },
   duvida: { label: '❓ Dúvidas', emoji: '❓', desc: 'Tirar dúvidas gerais', color: 0x00AAFF },
   parceria: { label: '🤝 Parceria', emoji: '🤝', desc: 'Quero ser parceiro', color: 0x00FF7F },
   reembolso: { label: '💸 Reembolso', emoji: '💸', desc: 'Solicitar reembolso/troca', color: 0xFF8C00 }
 };
+
+// Função para verificar se é ticket - MUITO mais flexível agora
+function isTicketChannel(channel){
+  if(!channel) return false;
+  try{
+    const name = (channel.name || '').toLowerCase();
+    const topic = (channel.topic || '').toLowerCase();
+    const parentId = channel.parentId || channel.parent_id || '';
+    
+    // Verifica por nome
+    if(name.includes('🎫') || name.includes('🛒') || name.includes('ticket') || name.includes('suporte') || name.includes('duvida') || name.includes('dúvida') || name.includes('parceria') || name.includes('reembolso') || name.includes('compra')) return true;
+    
+    // Verifica se está na categoria de tickets
+    if(CATEGORIA_TICKET_ID && parentId === CATEGORIA_TICKET_ID) return true;
+    
+    // Verifica por tópico
+    if(topic.includes('ticket') || topic.includes('criado por') || topic.includes('tipo:')) return true;
+    
+    // Se tem overwrites (canal privado), provavelmente é ticket
+    if(channel.permissionOverwrites && channel.permissionOverwrites.cache && channel.permissionOverwrites.cache.size >= 3) return true;
+    
+    return false;
+  }catch{ return false; }
+}
 
 function gerarPainelTicketsProfissional(){
   const embed = new EmbedBuilder()
@@ -670,23 +693,22 @@ function gerarPainelTicketsProfissional(){
 `
     )
     .addFields(
-      { name: '🛒 Comprar Conta', value: 'Quero comprar\nEntrega 5s', inline: true },
       { name: '🎫 Suporte', value: 'Problema com conta\nResolvemos rápido', inline: true },
       { name: '❓ Dúvidas', value: 'Tirar dúvidas\nSobre produtos', inline: true },
       { name: '🤝 Parceria', value: 'Ser parceiro\nGanhe dinheiro', inline: true },
       { name: '💸 Reembolso', value: 'Troca / Garantia\n7 dias garantia', inline: true },
-      { name: '⚡ Status', value: 'Online 24/7\nResposta imediata', inline: true }
+      { name: '⚡ Status', value: 'Online 24/7\nResposta imediata', inline: true },
+      { name: '💎 Loja', value: 'Use /painel-vendas\nPara comprar', inline: true }
     )
     .setFooter({ text: 'Leviathan Accounts • Sistema de tickets profissional • Desde 2024', iconURL: 'https://i.imgur.com/8QJ4sQy.png' })
     .setTimestamp();
 
   const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ticket_create_compra').setLabel('Comprar Conta').setStyle(ButtonStyle.Success).setEmoji('🛒'),
     new ButtonBuilder().setCustomId('ticket_create_suporte').setLabel('Suporte').setStyle(ButtonStyle.Danger).setEmoji('🎫'),
-    new ButtonBuilder().setCustomId('ticket_create_duvida').setLabel('Dúvidas').setStyle(ButtonStyle.Primary).setEmoji('❓')
+    new ButtonBuilder().setCustomId('ticket_create_duvida').setLabel('Dúvidas').setStyle(ButtonStyle.Primary).setEmoji('❓'),
+    new ButtonBuilder().setCustomId('ticket_create_parceria').setLabel('Parceria').setStyle(ButtonStyle.Secondary).setEmoji('🤝')
   );
   const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('ticket_create_parceria').setLabel('Parceria').setStyle(ButtonStyle.Secondary).setEmoji('🤝'),
     new ButtonBuilder().setCustomId('ticket_create_reembolso').setLabel('Reembolso').setStyle(ButtonStyle.Secondary).setEmoji('💸')
   );
 
@@ -855,8 +877,12 @@ ${CARGOS_CLIENTE.slice().reverse().map(c=>`${dados.totalGasto >= c.minimo ? '✅
       }
 
       if(interaction.commandName==='fechar'){
-        if(!interaction.channel.name.includes('🎫') && !interaction.channel.name.includes('🛒')){
-          return interaction.reply({ content: '❌ Este comando só pode ser usado dentro de um ticket!', ephemeral: true });
+        if(!isTicketChannel(interaction.channel)){
+          const isInTicketCategory = CATEGORIA_TICKET_ID && interaction.channel.parentId === CATEGORIA_TICKET_ID;
+          if(!isInTicketCategory){
+            // Permite fechar mesmo se não detectar, mas avisa
+            console.log(`⚠️ /fechar usado fora de ticket detectado: ${interaction.channel.name} (${interaction.channel.id}) - permitindo mesmo assim para staff`);
+          }
         }
         await interaction.reply({ content: '🔒 Fechando ticket em 3 segundos...' });
         setTimeout(()=>interaction.channel.delete().catch(()=>{}),3000);
@@ -1018,8 +1044,8 @@ ${dados.compras.length>0 ? dados.compras.map(c=>`> ${c.produto} - R$ ${c.preco.t
       }
       if(interaction.commandName==='ticket-add'){
         await interaction.deferReply({ephemeral:true});
-        if(!interaction.channel.name.includes('🎫') && !interaction.channel.name.includes('🛒')){
-          return interaction.followUp({ content: '❌ Só pode usar dentro de um ticket!', ephemeral: true });
+        if(!isTicketChannel(interaction.channel)){
+          return interaction.followUp({ content: '❌ Só pode usar dentro de um ticket!\n> Este canal não parece ser um ticket. Verifique se está dentro de um ticket criado pelo bot.', ephemeral: true });
         }
         const usuario = interaction.options.getUser('usuario');
         await interaction.channel.permissionOverwrites.edit(usuario.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
@@ -1027,8 +1053,8 @@ ${dados.compras.length>0 ? dados.compras.map(c=>`> ${c.produto} - R$ ${c.preco.t
       }
       if(interaction.commandName==='ticket-remove'){
         await interaction.deferReply({ephemeral:true});
-        if(!interaction.channel.name.includes('🎫') && !interaction.channel.name.includes('🛒')){
-          return interaction.followUp({ content: '❌ Só pode usar dentro de um ticket!', ephemeral: true });
+        if(!isTicketChannel(interaction.channel)){
+          return interaction.followUp({ content: '❌ Só pode usar dentro de um ticket!\n> Este canal não parece ser um ticket. Verifique se está dentro de um ticket criado pelo bot.', ephemeral: true });
         }
         const usuario = interaction.options.getUser('usuario');
         await interaction.channel.permissionOverwrites.delete(usuario.id).catch(()=>{});
@@ -1098,8 +1124,13 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
 
       // Controles dentro do ticket
       if(interaction.customId==='ticket_close' || interaction.customId==='fechar_ticket'){
-        if(!interaction.channel.name.includes('🎫') && !interaction.channel.name.includes('🛒')){
-          return interaction.reply({ content: '❌ Só pode fechar dentro de um ticket!', ephemeral: true });
+        if(!isTicketChannel(interaction.channel)){
+          // Se não detectar como ticket, ainda permite fechar se estiver na categoria de tickets OU for staff tentando fechar
+          const isInTicketCategory = CATEGORIA_TICKET_ID && interaction.channel.parentId === CATEGORIA_TICKET_ID;
+          const isStaffTrying = isStaff(interaction) || interaction.member.permissions.has(PermissionFlagsBits.ManageChannels);
+          if(!isInTicketCategory && !isStaffTrying){
+            return interaction.reply({ content: '❌ Só pode fechar dentro de um ticket!\n> Se este É um ticket, peça para um staff usar `/fechar` ou o botão de fechar.', ephemeral: true });
+          }
         }
         
         // Sistema de avaliação profissional antes de fechar
