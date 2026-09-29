@@ -503,9 +503,7 @@ const commands = [
        { name: 'Ativar anti-invite', value: 'invite_on' },
        { name: 'Desativar anti-invite', value: 'invite_off' },
        { name: 'Ativar anti-spam', value: 'spam_on' },
-       { name: 'Desativar anti-spam', value: 'spam_off' },
-       { name: 'Ativar anti-caps', value: 'caps_on' },
-       { name: 'Desativar anti-caps', value: 'caps_off' }
+       { name: 'Desativar anti-spam', value: 'spam_off' }
      )),
 ].map(c => c.toJSON());
 
@@ -557,198 +555,14 @@ const antiNukeCache = {
   mention: new Map()
 };
 
-// ===== SISTEMA AUTOMOD - ANTI PALAVRÃO, ANTI LINK, ANTI SPAM =====
-const AUTOMOD_FILE = './automod.json';
-
-const automodDefault = {
-  enabled: true,
-  antiPalavrao: true,
-  antiLink: true,
-  antiInvite: true,
-  antiSpam: true,
-  antiCaps: true,
-  antiFlood: true,
-  antiEveryone: true,
-  muteTime: 5, // minutos
-  maxWarnings: 3, // após 3 avisos, muta
-  ignoreChannels: [], // IDs de canais ignorados
-  ignoreRoles: [] // IDs de cargos ignorados
-};
-
-function carregarAutomod(){
-  if(!fs.existsSync(AUTOMOD_FILE)) {
-    fs.writeFileSync(AUTOMOD_FILE, JSON.stringify(automodDefault, null, 2));
-    return automodDefault;
-  }
-  try { 
-    const data = JSON.parse(fs.readFileSync(AUTOMOD_FILE,'utf8'));
-    return { ...automodDefault, ...data };
-  } catch { return automodDefault; }
-}
-function salvarAutomod(d){ fs.writeFileSync(AUTOMOD_FILE, JSON.stringify(d,null,2)); }
-
-let automodConfig = carregarAutomod();
-
-// Lista de palavrões - pesada BR
-const PALAVROES = [
-  'arrombado','arrombada','buceta','bucetuda','caralho','caralha','cuzao','cuzão','cuzinho',
-  'fuder','fodase','foda-se','foda','fodendo','fodido','fodida','fdp','filho da puta','filha da puta',
-  'puta','puto','putaria','piranha','pica','pau no cu','vai se fuder','vsf','vai tomar no cu','vtmnc',
-  'porra','porra nenhuma','merda','bosta','bostao','cu','cuzão','desgraça','desgraçado','corno','corna',
-  'otario','otaria','otário','retardado','retardada','imbecil','idiota','burro','burra','viado','viadinho',
-  'sapatão','traveco','mongol','mongoloide','nazista','racista','preto','macaco' // adicione com cuidado
-];
-
-// Lista de palavras extras ofensivas - pode expandir
-const PALAVROES_EXTRAS = [
-  'kys','kill yourself','se mata','vai se matar','lixo','noob lixo','cancer','câncer'
-];
-
-const TODOS_PALAVROES = [...PALAVROES, ...PALAVROES_EXTRAS];
-
-const LINK_REGEX = /(https?:\/\/[^\s]+|www\.[^\s]+|discord\.gg\/[^\s]+|discord\.com\/invite\/[^\s]+|discordapp\.com\/invite\/[^\s]+)/gi;
-const INVITE_REGEX = /(discord\.gg\/[^\s]+|discord\.com\/invite\/[^\s]+|discordapp\.com\/invite\/[^\s]+)/gi;
-
-const spamCache = new Map(); // userId -> { messages: [{content, timestamp}], lastMessage, count }
-const warningsCache = new Map(); // userId -> { count, lastWarn }
-const capsCache = new Map();
-
-function containsPalavrao(text){
-  const lower = text.toLowerCase();
-  // Remove acentos e normaliza
-  const normalized = lower.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  for(const palavra of TODOS_PALAVROES){
-    // Verifica palavra exata ou com bordas
-    const regex = new RegExp(`\\b${palavra.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-    if(regex.test(normalized) || normalized.includes(palavra)){
-      return palavra;
-    }
-  }
-  return null;
-}
-
-function isCapsAbuse(text){
-  if(text.length < 10) return false;
-  const letters = text.replace(/[^a-zA-Z]/g, '');
-  if(letters.length < 8) return false;
-  const upper = letters.replace(/[^A-Z]/g, '').length;
-  return (upper / letters.length) > 0.7; // 70% em maiúsculas
-}
-
-function checkSpam(userId, content){
-  const now = Date.now();
-  if(!spamCache.has(userId)){
-    spamCache.set(userId, { messages: [], lastContent: '', repeatCount: 0 });
-  }
-  const data = spamCache.get(userId);
-  
-  // Limpa mensagens antigas (5s)
-  data.messages = data.messages.filter(m => now - m.timestamp < 5000);
-  data.messages.push({ content, timestamp: now });
-  
-  // Flood - 5 mensagens em 5 segundos
-  if(data.messages.length >= 5) return { type: 'flood', count: data.messages.length };
-  
-  // Mensagem repetida
-  if(data.lastContent === content){
-    data.repeatCount++;
-    if(data.repeatCount >= 3) return { type: 'repeat', count: data.repeatCount };
-  } else {
-    data.repeatCount = 1;
-    data.lastContent = content;
-  }
-  
-  // Mensagens muito parecidas (mesmo texto em canais diferentes)
-  const sameMessages = data.messages.filter(m => m.content === content).length;
-  if(sameMessages >= 3) return { type: 'same', count: sameMessages };
-  
-  return null;
-}
-
-async function applyAutomodPunishment(member, reason, deleteMessage = null){
-  try{
-    if(isWhitelisted(member.id, member)) return false;
-    
-    // Ignora staff
-    if(STAFF_ROLE_ID && member.roles.cache.has(STAFF_ROLE_ID)) return false;
-    
-    // Sistema de warnings
-    const userId = member.id;
-    const now = Date.now();
-    
-    if(!warningsCache.has(userId)){
-      warningsCache.set(userId, { count: 0, lastWarn: 0, history: [] });
-    }
-    
-    const warnData = warningsCache.get(userId);
-    // Reseta warnings se passou 10 minutos
-    if(now - warnData.lastWarn > 600000){
-      warnData.count = 0;
-      warnData.history = [];
-    }
-    
-    warnData.count++;
-    warnData.lastWarn = now;
-    warnData.history.push({ reason, timestamp: now });
-    
-    // Deleta mensagem
-    if(deleteMessage){
-      try{ await deleteMessage.delete().catch(()=>{}); }catch{}
-    }
-    
-    // Se passou do limite, muta
-    if(warnData.count >= automodConfig.maxWarnings){
-      const muteTime = automodConfig.muteTime * 60 * 1000;
-      try{
-        await member.timeout(muteTime, `Automod: ${reason} - ${warnData.count} infrações`).catch(()=>{});
-        console.log(`🔇 Automod mutou ${member.user.tag} por ${automodConfig.muteTime}min - ${reason}`);
-        
-        // Reseta warnings após mutar
-        warnData.count = 0;
-        
-        // Avisa no canal
-        const embed = new EmbedBuilder()
-          .setColor(0xFF8C00)
-          .setTitle('🔇 Usuário silenciado pelo Automod')
-          .setDescription(
-`**Usuário:** ${member} (${member.user.tag})
-**Motivo:** ${reason}
-**Tempo:** ${automodConfig.muteTime} minutos
-**Avisos:** ${automodConfig.maxWarnings}/${automodConfig.maxWarnings}
-
-> Mensagens repetidas e spam não são permitidos
-> Leia as regras em <#${CATEGORIA_TICKET_ID ? 'regras' : 'regras'}>
-`
-          )
-          .setFooter({ text: 'Leviathan Accounts • Automod' })
-          .setTimestamp();
-        
-        if(deleteMessage?.channel){
-          await deleteMessage.channel.send({ embeds: [embed] }).then(m => setTimeout(()=>m.delete().catch(()=>{}), 10000)).catch(()=>{});
-        }
-        
-        return true;
-      }catch(e){
-        console.log(`Erro ao mutar ${member.user.tag}: ${e.message}`);
-      }
-    } else {
-      // Só avisa
-      const embed = new EmbedBuilder()
-        .setColor(0xFFD700)
-        .setDescription(`⚠️ ${member}, **${reason}**\n> Aviso ${warnData.count}/${automodConfig.maxWarnings} - Na próxima você será silenciado por ${automodConfig.muteTime}min`)
-        .setFooter({ text: 'Automod • Leviathan Accounts' });
-      
-      if(deleteMessage?.channel){
-        await deleteMessage.channel.send({ embeds: [embed] }).then(m => setTimeout(()=>m.delete().catch(()=>{}), 5000)).catch(()=>{});
-      }
-      
-      return false;
-    }
-    
-  }catch(e){
-    console.log('Erro automod punishment:', e.message);
-    return false;
-  }
+// ===== SISTEMA AUTOMOD - MODULAR (arquivo separado automod.js) =====
+const automod = require('./automod.js');
+let automodConfig = automod.config;
+const TODOS_PALAVROES = automod.PALAVROES;
+function salvarAutomod(d){ 
+  automod.config = { ...automod.config, ...d };
+  automod.salvar();
+  automodConfig = automod.config;
 }
 
 function isWhitelisted(userId, memberOrGuild){
@@ -1216,7 +1030,7 @@ client.on('webhookUpdate', async (channel) => {
   }catch(e){ console.log('Erro webhookUpdate:', e.message); }
 });
 
-// ===== ANTI @everyone + AUTOMOD (PALAVRÃO, LINK, SPAM, CAPS) =====
+// ===== ANTI @everyone + AUTOMOD MODULAR =====
 client.on('messageCreate', async (message) => {
   if(!message.guild) return;
   if(!isGuildAllowed(message.guild.id)) return;
@@ -1248,89 +1062,22 @@ client.on('messageCreate', async (message) => {
     }catch(e){ console.log('Erro mention:', e.message); }
   }
   
-  // Anti link de webhook / token
-  if(message.content.includes('discord.com/api/webhooks') || message.content.includes('https://discord.com/api/webhooks')){
+  // Anti link de webhook / token (protege contra roubo)
+  if(message.content.includes('discord.com/api/webhooks')){
     await message.delete().catch(()=>{});
     console.log(`🛡️ Webhook link deletado de ${message.author.tag}`);
     return;
   }
 
-  // ===== AUTOMOD - SÓ RODA SE ATIVADO =====
-  if(!automodConfig.enabled) return;
-  
-  // Ignora canais configurados
-  if(automodConfig.ignoreChannels.includes(message.channel.id)) return;
-  // Ignora cargos configurados
-  if(message.member && message.member.roles.cache.some(r => automodConfig.ignoreRoles.includes(r.id))) return;
-  // Ignora tickets (não modera dentro de ticket)
-  if(isTicketChannel(message.channel)) return;
-
-  const content = message.content;
-
-  // 1. ANTI PALAVRÃO
-  if(automodConfig.antiPalavrao){
-    const palavrãoEncontrado = containsPalavrao(content);
-    if(palavrãoEncontrado){
-      console.log(`🤬 Automod palavrão: ${message.author.tag} disse "${palavrãoEncontrado}"`);
-      await applyAutomodPunishment(message.member, `Palavrão detectado: \`${palavrãoEncontrado}\``, message);
-      return;
-    }
-  }
-
-  // 2. ANTI INVITE (discord.gg)
-  if(automodConfig.antiInvite){
-    if(INVITE_REGEX.test(content)){
-      console.log(`🔗 Automod invite: ${message.author.tag} mandou invite`);
-      await applyAutomodPunishment(message.member, `Link de convite Discord não permitido`, message);
-      return;
-    }
-  }
-
-  // 3. ANTI LINK (qualquer link)
-  if(automodConfig.antiLink){
-    // Permite links do imgur, youtube, etc? Por enquanto bloqueia tudo exceto se for staff
-    // Você pode adicionar whitelist de domínios aqui
-    const allowedDomains = ['imgur.com', 'i.imgur.com', 'youtube.com', 'youtu.be', 'tenor.com', 'giphy.com'];
-    const hasLink = LINK_REGEX.test(content);
-    if(hasLink){
-      // Verifica se é link permitido
-      const isAllowed = allowedDomains.some(d => content.toLowerCase().includes(d));
-      if(!isAllowed){
-        console.log(`🔗 Automod link: ${message.author.tag} mandou link`);
-        await applyAutomodPunishment(message.member, `Links não são permitidos aqui`, message);
-        return;
-      }
-    }
-  }
-
-  // 4. ANTI CAPS
-  if(automodConfig.antiCaps){
-    if(isCapsAbuse(content)){
-      console.log(`🔠 Automod caps: ${message.author.tag}`);
-      await applyAutomodPunishment(message.member, `Uso excessivo de CAPS LOCK`, message);
-      return;
-    }
-  }
-
-  // 5. ANTI SPAM / FLOOD
-  if(automodConfig.antiSpam || automodConfig.antiFlood){
-    const spamResult = checkSpam(message.author.id, content);
-    if(spamResult){
-      if(spamResult.type === 'flood'){
-        console.log(`💬 Automod flood: ${message.author.tag} - ${spamResult.count} msgs em 5s`);
-        await applyAutomodPunishment(message.member, `Flood - ${spamResult.count} mensagens em 5 segundos`, message);
-        return;
-      }
-      if(spamResult.type === 'repeat' || spamResult.type === 'same'){
-        console.log(`🔁 Automod repeat: ${message.author.tag} - repetindo mensagem`);
-        await applyAutomodPunishment(message.member, `Spam - Mensagem repetida ${spamResult.count}x`, message);
-        return;
-      }
-    }
+  // ===== AUTOMOD MODULAR - chama arquivo automod.js =====
+  try{
+    await automod.handleMessage(message, isWhitelisted, isTicketChannel);
+  }catch(e){
+    console.log('Erro automod handle:', e.message);
   }
 });
 
-console.log('🛡️ Sistema anti-nuke + Automod carregado com sucesso!');
+console.log('🛡️ Sistema anti-nuke + Automod modular carregado!');
 
 
 async function gerarPainelUnico(){
@@ -2048,18 +1795,21 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
 
 **📋 Filtros:**
 > 🤬 Anti-palavrão: ${cfg.antiPalavrao ? '🟢 ON' : '🔴 OFF'}
-> 🔗 Anti-link: ${cfg.antiLink ? '🟢 ON' : '🔴 OFF'}
-> 📨 Anti-invite (discord.gg): ${cfg.antiInvite ? '🟢 ON' : '🔴 OFF'}
+> 🔗 Anti-link: ${cfg.antiLink ? '🟢 ON' : '🔴 OFF'} (liberado em #parcerias)
+> 📨 Anti-invite (discord.gg): ${cfg.antiInvite ? '🟢 ON' : '🔴 OFF'} (liberado em #parcerias)
 > 💬 Anti-spam: ${cfg.antiSpam ? '🟢 ON' : '🔴 OFF'}
-> 🔠 Anti-caps: ${cfg.antiCaps ? '🟢 ON' : '🔴 OFF'}
 > 🔁 Anti-flood (5 msgs/5s): ${cfg.antiFlood ? '🟢 ON' : '🔴 OFF'}
 > 📢 Anti-@everyone: ${cfg.antiEveryone ? '🟢 ON' : '🔴 OFF'}
+
+**🤝 Canais liberados para convites:**
+> #parcerias, #parceria, #🤝parcerias, #divulgações
+> Tickets de parceria (🤝 Parceria)
 
 **👤 Quem é ignorado:**
 > ✅ Staff (<@&${STAFF_ROLE_ID}>)
 > ✅ Dono do servidor
 > ✅ Whitelist anti-nuke
-> ✅ Tickets (não modera dentro)
+> ✅ Tickets normais (não modera dentro)
 
 **🔧 Comandos:**
 > /automod ativar - Ativa tudo
@@ -2081,10 +1831,9 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
           automodConfig.antiLink = true;
           automodConfig.antiInvite = true;
           automodConfig.antiSpam = true;
-          automodConfig.antiCaps = true;
           automodConfig.antiFlood = true;
           salvarAutomod(automodConfig);
-          return interaction.followUp({ content: '✅ **Automod ATIVADO!**\n> Anti-palavrão, anti-link, anti-spam, anti-caps tudo ligado!', ephemeral: true });
+          return interaction.followUp({ content: '✅ **Automod ATIVADO!**\n> Anti-palavrão, anti-link, anti-spam ligado! (anti-caps removido, parceria liberada)', ephemeral: true });
         }
         
         if(acao==='desativar'){
@@ -2102,8 +1851,6 @@ ${ultimas.map(a=>`> ${'⭐'.repeat(a.estrelas)} ${a.estrelas}/5 - ${a.clienteTag
           'invite_off': ['antiInvite', false, 'Anti-invite DESATIVADO'],
           'spam_on': ['antiSpam', true, 'Anti-spam ATIVADO'],
           'spam_off': ['antiSpam', false, 'Anti-spam DESATIVADO'],
-          'caps_on': ['antiCaps', true, 'Anti-caps ATIVADO'],
-          'caps_off': ['antiCaps', false, 'Anti-caps DESATIVADO'],
         };
         
         if(map[acao]){
